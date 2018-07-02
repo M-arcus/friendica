@@ -31,16 +31,8 @@ BaseObject::setApp($a);
 // The value is set to "true" by default in boot.php
 $a->backend = false;
 
-/**
- * Load the configuration file which contains our DB credentials.
- * Ignore errors. If the file doesn't exist or is empty, we are running in
- * installation mode.
- */
-
-$install = ((file_exists('.htconfig.php') && filesize('.htconfig.php')) ? false : true);
-
-// Only load config if found, don't surpress errors
-if (!$install) {
+// Only load config if found, don't suppress errors
+if (!$a->mode == App::MODE_INSTALL) {
 	include ".htconfig.php";
 }
 
@@ -50,7 +42,7 @@ if (!$install) {
 
 require_once "include/dba.php";
 
-if (!$install) {
+if (!$a->mode == App::MODE_INSTALL) {
 	$result = dba::connect($db_host, $db_user, $db_pass, $db_data);
 	unset($db_host, $db_user, $db_pass, $db_data);
 
@@ -85,7 +77,7 @@ if (!$install) {
 	Addon::loadHooks();
 	Addon::callHooks('init_1');
 
-	$maintenance = Config::get('system', 'maintenance');
+	$a->checkMaintenanceMode();
 }
 
 $lang = L10n::getBrowserLanguage();
@@ -129,23 +121,33 @@ if ((x($_SESSION, 'language')) && ($_SESSION['language'] !== $lang)) {
 	L10n::loadTranslationTable($lang);
 }
 
-if ((x($_GET, 'zrl')) && (!$install && !$maintenance)) {
-	// Only continue when the given profile link seems valid
-	// Valid profile links contain a path with "/profile/" and no query parameters
-	if ((parse_url($_GET['zrl'], PHP_URL_QUERY) == "")
-		&& strstr(parse_url($_GET['zrl'], PHP_URL_PATH), "/profile/")
-	) {
-		$_SESSION['my_url'] = $_GET['zrl'];
-		$a->query_string = preg_replace('/[\?&]zrl=(.*?)([\?&]|$)/is', '', $a->query_string);
-		Profile::zrlInit($a);
-	} else {
-		// Someone came with an invalid parameter, maybe as a DDoS attempt
-		// We simply stop processing here
-		logger("Invalid ZRL parameter ".$_GET['zrl'], LOGGER_DEBUG);
-		header('HTTP/1.1 403 Forbidden');
-		echo "<h1>403 Forbidden</h1>";
-		killme();
+if ((x($_GET,'zrl')) && $a->mode == App::MODE_NORMAL) {
+	$a->query_string = Profile::stripZrls($a->query_string);
+	if (!local_user()) {
+		// Only continue when the given profile link seems valid
+		// Valid profile links contain a path with "/profile/" and no query parameters
+		if ((parse_url($_GET['zrl'], PHP_URL_QUERY) == "") &&
+			strstr(parse_url($_GET['zrl'], PHP_URL_PATH), "/profile/")) {
+			if ($_SESSION["visitor_home"] != $_GET["zrl"]) {
+				$_SESSION['my_url'] = $_GET['zrl'];
+				$_SESSION['authenticated'] = 0;
+			}
+			Profile::zrlInit($a);
+		} else {
+			// Someone came with an invalid parameter, maybe as a DDoS attempt
+			// We simply stop processing here
+			logger("Invalid ZRL parameter " . $_GET['zrl'], LOGGER_DEBUG);
+			header('HTTP/1.1 403 Forbidden');
+			echo "<h1>403 Forbidden</h1>";
+			killme();
+		}
 	}
+}
+
+if ((x($_GET,'owt')) && $a->mode == App::MODE_NORMAL) {
+	$token = $_GET['owt'];
+	$a->query_string = Profile::stripQueryParam($a->query_string, 'owt');
+	Profile::openWebAuthInit($token);
 }
 
 /**
@@ -181,9 +183,9 @@ $_SESSION['last_updated'] = defaults($_SESSION, 'last_updated', []);
 
 // in install mode, any url loads install module
 // but we need "view" module for stylesheet
-if ($install && $a->module!="view") {
+if ($a->mode == App::MODE_INSTALL && $a->module!="view") {
 	$a->module = 'install';
-} elseif ($maintenance && $a->module!="view") {
+} elseif ($a->mode == App::MODE_MAINTENANCE && $a->module!="view") {
 	$a->module = 'maintenance';
 } else {
 	check_url($a);
@@ -228,8 +230,36 @@ if (strlen($a->module)) {
 	 */
 
 	// Compatibility with the Android Diaspora client
-	if ($a->module == "stream") {
-		$a->module = "network";
+	if ($a->module == 'stream') {
+		goaway('network?f=&order=post');
+	}
+
+	if ($a->module == 'conversations') {
+		goaway('message');
+	}
+
+	if ($a->module == 'commented') {
+		goaway('network?f=&order=comment');
+	}
+
+	if ($a->module == 'liked') {
+		goaway('network?f=&order=comment');
+	}
+
+	if ($a->module == 'activity') {
+		goaway('network/?f=&conv=1');
+	}
+
+	if (($a->module == 'status_messages') && ($a->cmd == 'status_messages/new')) {
+		goaway('bookmarklet');
+	}
+
+	if (($a->module == 'user') && ($a->cmd == 'user/edit')) {
+		goaway('settings');
+	}
+
+	if (($a->module == 'tag_followings') && ($a->cmd == 'tag_followings/manage')) {
+		goaway('search');
 	}
 
 	// Compatibility with the Firefox App
@@ -302,7 +332,7 @@ if (strlen($a->module)) {
 /**
  * Load current theme info
  */
-$theme_info_file = "view/theme/".current_theme()."/theme.php";
+$theme_info_file = 'view/theme/' . $a->getCurrentTheme() . '/theme.php';
 if (file_exists($theme_info_file)) {
 	require_once $theme_info_file;
 }
@@ -314,7 +344,7 @@ if (! x($a->page, 'content')) {
 	$a->page['content'] = '';
 }
 
-if (!$install && !$maintenance) {
+if ($a->mode == App::MODE_NORMAL) {
 	Addon::callHooks('page_content_top', $a->page['content']);
 }
 
@@ -335,8 +365,8 @@ if ($a->module_loaded) {
 		$func($a);
 	}
 
-	if (function_exists(str_replace('-', '_', current_theme()) . '_init')) {
-		$func = str_replace('-', '_', current_theme()) . '_init';
+	if (function_exists(str_replace('-', '_', $a->getCurrentTheme()) . '_init')) {
+		$func = str_replace('-', '_', $a->getCurrentTheme()) . '_init';
 		$func($a);
 	}
 
@@ -374,8 +404,8 @@ if ($a->module_loaded) {
 		$a->page['content'] .= $arr['content'];
 	}
 
-	if (function_exists(str_replace('-', '_', current_theme()) . '_content_loaded')) {
-		$func = str_replace('-', '_', current_theme()) . '_content_loaded';
+	if (function_exists(str_replace('-', '_', $a->getCurrentTheme()) . '_content_loaded')) {
+		$func = str_replace('-', '_', $a->getCurrentTheme()) . '_content_loaded';
 		$func($a);
 	}
 }
@@ -450,7 +480,7 @@ if ($a->is_mobile || $a->is_tablet) {
  */
 
 if (!$a->theme['stylesheet']) {
-	$stylesheet = current_theme_url();
+	$stylesheet = $a->getCurrentThemeStylesheetPath();
 } else {
 	$stylesheet = $a->theme['stylesheet'];
 }

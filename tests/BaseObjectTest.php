@@ -7,12 +7,12 @@ namespace Friendica\Test;
 
 use Friendica\App;
 use Friendica\BaseObject;
-use PHPUnit_Framework_TestCase;
+use PHPUnit\Framework\TestCase;
 
 /**
  * Tests for the BaseObject class.
  */
-class BaseObjectTest extends PHPUnit_Framework_TestCase
+class BaseObjectTest extends TestCase
 {
 
 	/**

@@ -17,6 +17,7 @@ use Friendica\Core\System;
 use Friendica\Core\Worker;
 use Friendica\Database\DBM;
 use Friendica\Model\Contact;
+use Friendica\Model\OpenWebAuthToken;
 use Friendica\Protocol\Diaspora;
 use Friendica\Util\DateTimeFormat;
 use Friendica\Util\Network;
@@ -90,16 +91,16 @@ class Profile
 	 */
 	public static function load(App $a, $nickname, $profile = 0, $profiledata = [], $show_connect = true)
 	{
-		$user = dba::selectFirst('user', ['uid'], ['nickname' => $nickname]);
+		$user = dba::selectFirst('user', ['uid'], ['nickname' => $nickname, 'account_removed' => false]);
 
-		if (!$user && !count($user) && !count($profiledata)) {
+		if (!DBM::is_result($user) && empty($profiledata)) {
 			logger('profile error: ' . $a->query_string, LOGGER_DEBUG);
 			notice(L10n::t('Requested account is not available.') . EOL);
 			$a->error = 404;
 			return;
 		}
 
-		if (!x($a->page, 'aside')) {
+		if (empty($a->page['aside'])) {
 			$a->page['aside'] = '';
 		}
 
@@ -152,13 +153,9 @@ class Profile
 
 		$a->set_template_engine(); // reset the template engine to the default in case the user's theme doesn't specify one
 
-		$theme_info_file = 'view/theme/' . current_theme() . '/theme.php';
+		$theme_info_file = 'view/theme/' . $a->getCurrentTheme() . '/theme.php';
 		if (file_exists($theme_info_file)) {
 			require_once $theme_info_file;
-		}
-
-		if (!x($a->page, 'aside')) {
-			$a->page['aside'] = '';
 		}
 
 		if (local_user() && local_user() == $a->profile['uid'] && $profiledata) {
@@ -500,7 +497,7 @@ class Profile
 			$p['photo'] = proxy_url($p['photo'], false, PROXY_SIZE_SMALL);
 		}
 
-		$p['url'] = self::magicLink($p['url']);
+		$p['url'] = Contact::magicLink($p['url']);
 
 		$tpl = get_markup_template('profile_vcard.tpl');
 		$o .= replace_macros($tpl, [
@@ -598,12 +595,8 @@ class Profile
 					$cids[] = $rr['cid'];
 
 					$today = (((strtotime($rr['start'] . ' +00:00') < $now) && (strtotime($rr['finish'] . ' +00:00') > $now)) ? true : false);
-					$url = $rr['url'];
-					if ($rr['network'] === NETWORK_DFRN) {
-						$url = System::baseUrl() . '/redir/' . $rr['cid'];
-					}
 
-					$rr['link'] = $url;
+					$rr['link'] = Contact::magicLink($rr['url']);
 					$rr['title'] = $rr['name'];
 					$rr['date'] = day_translate(DateTimeFormat::convert($rr['start'], $a->timezone, 'UTC', $rr['adjust'] ? $bd_format : $bd_short)) . (($today) ? ' ' . L10n::t('[today]') : '');
 					$rr['startime'] = null;
@@ -644,26 +637,26 @@ class Profile
 		$classtoday = '';
 
 		$s = dba::p(
-			"SELECT *
+			"SELECT `event`.*
 			FROM `event`
-			WHERE `event`.`uid` = ?
-			AND  `event`.`type` != 'birthday'
-			AND  `event`.`start` < ?
-			AND  `event`.`start` >= ?
-			AND NOT EXISTS (
-				SELECT `id`
-				FROM `item`
-				WHERE `item`.`uid` = `event`.`uid`
+			INNER JOIN `item`
+				ON `item`.`uid` = `event`.`uid`
 				AND `item`.`parent-uri` = `event`.`uri`
-				AND `item`.`verb` = ?
-				AND `item`.`visible`
-				AND NOT `item`.`deleted`
-			)
+			WHERE `event`.`uid` = ?
+			AND `event`.`type` != 'birthday'
+			AND `event`.`start` < ?
+			AND `event`.`start` >= ?
+			AND `item`.`author-id` = ?
+			AND (`item`.`verb` = ? OR `item`.`verb` = ?)
+			AND `item`.`visible`
+			AND NOT `item`.`deleted`
 			ORDER BY  `event`.`start` ASC",
 			local_user(),
 			DateTimeFormat::utc('now + 7 days'),
 			DateTimeFormat::utc('now - 1 days'),
-			ACTIVITY_ATTENDNO
+			public_contact(),
+			ACTIVITY_ATTEND,
+			ACTIVITY_ATTENDMAYBE
 		);
 
 		$r = [];
@@ -717,7 +710,7 @@ class Profile
 			'$classtoday' => $classtoday,
 			'$count' => count($r),
 			'$event_reminders' => L10n::t('Event Reminders'),
-			'$event_title' => L10n::t('Events this week:'),
+			'$event_title' => L10n::t('Upcoming events the next 7 days:'),
 			'$events' => $r,
 		]);
 	}
@@ -954,7 +947,7 @@ class Profile
 			];
 		}
 
-		if ((!$is_owner) && ((count($a->profile)) || (!$a->profile['hide-friends']))) {
+		if (!$is_owner && empty($a->profile['hide-friends'])) {
 			$tabs[] = [
 				'label' => L10n::t('Contacts'),
 				'url'   => System::baseUrl() . '/viewcontacts/' . $nickname,
@@ -986,48 +979,127 @@ class Profile
 		return null;
 	}
 
+	/**
+	 * Process the 'zrl' parameter and initiate the remote authentication.
+	 * 
+	 * This method checks if the visitor has a public contact entry and
+	 * redirects the visitor to his/her instance to start the magic auth (Authentication)
+	 * process.
+	 * 
+	 * Ported from Hubzilla: https://framagit.org/hubzilla/core/blob/master/include/channel.php
+	 * 
+	 * @param App $a Application instance.
+	 */
 	public static function zrlInit(App $a)
 	{
 		$my_url = self::getMyURL();
 		$my_url = Network::isUrlValid($my_url);
+
 		if ($my_url) {
-			// Is it a DDoS attempt?
-			// The check fetches the cached value from gprobe to reduce the load for this system
-			$urlparts = parse_url($my_url);
+			if (!local_user()) {
+				// Is it a DDoS attempt?
+				// The check fetches the cached value from gprobe to reduce the load for this system
+				$urlparts = parse_url($my_url);
 
-			$result = Cache::get('gprobe:' . $urlparts['host']);
-			if ((!is_null($result)) && (in_array($result['network'], [NETWORK_FEED, NETWORK_PHANTOM]))) {
-				logger('DDoS attempt detected for ' . $urlparts['host'] . ' by ' . $_SERVER['REMOTE_ADDR'] . '. server data: ' . print_r($_SERVER, true), LOGGER_DEBUG);
-				return;
+				$result = Cache::get('gprobe:' . $urlparts['host']);
+				if ((!is_null($result)) && (in_array($result['network'], [NETWORK_FEED, NETWORK_PHANTOM]))) {
+					logger('DDoS attempt detected for ' . $urlparts['host'] . ' by ' . $_SERVER['REMOTE_ADDR'] . '. server data: ' . print_r($_SERVER, true), LOGGER_DEBUG);
+					return;
+				}
+
+				Worker::add(PRIORITY_LOW, 'GProbe', $my_url);
+				$arr = ['zrl' => $my_url, 'url' => $a->cmd];
+				Addon::callHooks('zrl_init', $arr);
+
+				// Try to find the public contact entry of the visitor.
+				$cid = Contact::getIdForURL($my_url);
+				if (!$cid) {
+					logger('No contact record found for ' . $my_url, LOGGER_DEBUG);
+					return;
+				}
+
+				$contact = dba::selectFirst('contact',['id', 'url'], ['id' => $cid]);
+
+				if (DBM::is_result($contact) && remote_user() && remote_user() == $contact['id']) {
+					// The visitor is already authenticated.
+					return;
+				}
+
+				logger('Not authenticated. Invoking reverse magic-auth for ' . $my_url, LOGGER_DEBUG);
+
+				// Try to avoid recursion - but send them home to do a proper magic auth.
+				$query = str_replace(array('?zrl=', '&zid='), array('?rzrl=', '&rzrl='), $a->query_string);
+				// The other instance needs to know where to redirect.
+				$dest = urlencode(System::baseUrl() . '/' . $query);
+
+				// We need to extract the basebath from the profile url
+				// to redirect the visitors '/magic' module.
+				// Note: We should have the basepath of a contact also in the contact table.
+				$urlarr = explode('/profile/', $contact['url']);
+				$basepath = $urlarr[0];
+
+				if ($basepath != System::baseUrl() && !strstr($dest, '/magic') && !strstr($dest, '/rmagic')) {
+					goaway($basepath . '/magic' . '?f=&owa=1&dest=' . $dest);
+				}
 			}
-
-			Worker::add(PRIORITY_LOW, 'GProbe', $my_url);
-			$arr = ['zrl' => $my_url, 'url' => $a->cmd];
-			Addon::callHooks('zrl_init', $arr);
 		}
 	}
 
 	/**
-	 * @brief Returns a magic link to authenticate remote visitors
+	 * OpenWebAuth authentication.
 	 *
-	 * @param string $contact_url The address of the contact profile
-	 * @param integer $uid The user id, "local_user" is the default
-	 *
-	 * @return string with "redir" link
+	 * Ported from Hubzilla: https://framagit.org/hubzilla/core/blob/master/include/zid.php
+	 * 
+	 * @param string $token
 	 */
-	public static function magicLink($contact_url, $uid = -1)
+	public static function openWebAuthInit($token)
 	{
-		if ($uid == -1) {
-			$uid = local_user();
+		$a = get_app();
+
+		// Clean old OpenWebAuthToken entries.
+		OpenWebAuthToken::purge('owt', '3 MINUTE');
+
+		// Check if the token we got is the same one
+		// we have stored in the database.
+		$visitor_handle = OpenWebAuthToken::getMeta('owt', 0, $token);
+
+		if($visitor_handle === false) {
+			return;
 		}
-		$condition = ['pending' => false, 'uid' => $uid,
-				'nurl' => normalise_link($contact_url),
-				'network' => NETWORK_DFRN, 'self' => false];
-		$contact = dba::selectFirst('contact', ['id'], $condition);
-		if (DBM::is_result($contact)) {
-			return System::baseUrl() . '/redir/' . $contact['id'];
+
+		// Try to find the public contact entry of the visitor.
+		$cid = Contact::getIdForURL($visitor_handle);
+		if(!$cid) {
+			logger('owt: unable to finger ' . $visitor_handle, LOGGER_DEBUG);
+			return;
 		}
-		return self::zrl($contact_url);
+
+		$visitor = dba::selectFirst('contact', [], ['id' => $cid]);
+
+		// Authenticate the visitor.
+		$_SESSION['authenticated'] = 1;
+		$_SESSION['visitor_id'] = $visitor['id'];
+		$_SESSION['visitor_handle'] = $visitor['addr'];
+		$_SESSION['visitor_home'] = $visitor['url'];
+		$_SESSION['my_url'] = $visitor['url'];
+
+		$arr = [
+			'visitor' => $visitor,
+			'url' => $a->query_string
+		];
+		/**
+		 * @hooks magic_auth_success
+		 *   Called when a magic-auth was successful.
+		 *   * \e array \b visitor
+		 *   * \e string \b url
+		 */
+		Addon::callHooks('magic_auth_success', $arr);
+
+		$a->contact = $arr['visitor'];
+
+		info(L10n::t('OpenWebAuth: %1$s welcomes %2$s', $a->get_hostname(), $visitor['name']));
+
+		logger('OpenWebAuth: auth success from ' . $visitor['addr'], LOGGER_DEBUG);
 	}
 
 	public static function zrl($s, $force = false)
@@ -1072,5 +1144,27 @@ class Profile
 		}
 
 		return $uid;
+	}
+
+	/**
+	* Stip zrl parameter from a string.
+	* 
+	* @param string $s The input string.
+	* @return string The zrl.
+	*/
+	public static function stripZrls($s)
+	{
+		return preg_replace('/[\?&]zrl=(.*?)([\?&]|$)/is', '', $s);
+	}
+
+	/**
+	* Stip query parameter from a string.
+	* 
+	* @param string $s The input string.
+	* @return string The query parameter.
+	*/
+	public static function stripQueryParam($s, $param)
+	{
+		return preg_replace('/[\?&]' . $param . '=(.*?)(&|$)/ism', '$2', $s);
 	}
 }

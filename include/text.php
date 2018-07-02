@@ -14,6 +14,7 @@ use Friendica\Core\L10n;
 use Friendica\Core\PConfig;
 use Friendica\Core\System;
 use Friendica\Database\DBM;
+use Friendica\Model\Contact;
 use Friendica\Model\Event;
 use Friendica\Model\Item;
 use Friendica\Model\Profile;
@@ -151,7 +152,7 @@ function autoname($len) {
 				'nd','ng','nk','nt','rn','rp','rt'];
 
 	$noend = ['bl', 'br', 'cl','cr','dr','fl','fr','gl','gr',
-				'kh', 'kl','kr','mn','pl','pr','rh','tr','qu','wh'];
+				'kh', 'kl','kr','mn','pl','pr','rh','tr','qu','wh','q'];
 
 	$start = mt_rand(0,2);
 	if ($start == 0) {
@@ -177,14 +178,13 @@ function autoname($len) {
 	$word = substr($word,0,$len);
 
 	foreach ($noend as $noe) {
-		if ((strlen($word) > 2) && (substr($word, -2) == $noe)) {
-			$word = substr($word, 0, -1);
+		$noelen = strlen($noe);
+		if ((strlen($word) > $noelen) && (substr($word, -$noelen) == $noe)) {
+			$word = autoname($len);
 			break;
 		}
 	}
-	if (substr($word, -1) == 'q') {
-		$word = substr($word, 0, -1);
-	}
+
 	return $word;
 }
 
@@ -452,7 +452,7 @@ function perms2str($p) {
 	if (is_array($p)) {
 		$tmp = $p;
 	} else {
-		$tmp = explode(',',$p);
+		$tmp = explode(',', $p);
 	}
 
 	if (is_array($tmp)) {
@@ -460,33 +460,6 @@ function perms2str($p) {
 		$ret = implode('', $tmp);
 	}
 	return $ret;
-}
-
-
-/**
- * generate a guaranteed unique (for this domain) item ID for ATOM
- * safe from birthday paradox
- *
- * @param string $hostname
- * @param int $uid
- * @return string
- */
-function item_new_uri($hostname, $uid, $guid = "") {
-
-	do {
-		if ($guid == "") {
-			$hash = get_guid(32);
-		} else {
-			$hash = $guid;
-			$guid = "";
-		}
-
-		$uri = "urn:X-dfrn:" . $hostname . ':' . $uid . ':' . $hash;
-
-		$dups = dba::exists('item', ['uri' => $uri]);
-	} while ($dups == true);
-
-	return $uri;
 }
 
 /**
@@ -501,7 +474,7 @@ function item_new_uri($hostname, $uid, $guid = "") {
  */
 function load_view_file($s) {
 	global $lang, $a;
-	if (! isset($lang)) {
+	if (!isset($lang)) {
 		$lang = 'en';
 	}
 	$b = basename($s);
@@ -513,7 +486,7 @@ function load_view_file($s) {
 		return $content;
 	}
 
-	$theme = current_theme();
+	$theme = $a->getCurrentTheme();
 
 	if (file_exists("$d/theme/$theme/$b")) {
 		$stamp1 = microtime(true);
@@ -546,7 +519,7 @@ function get_intltext_template($s) {
 		$engine = "/smarty3";
 	}
 
-	if (! isset($lang)) {
+	if (!isset($lang)) {
 		$lang = 'en';
 	}
 
@@ -637,7 +610,7 @@ function logger($msg, $level = 0) {
 
 	// turn off logger in install mode
 	if (
-		$a->module == 'install'
+		$a->mode == App::MODE_INSTALL
 		|| !dba::$connected
 	) {
 		return;
@@ -648,8 +621,8 @@ function logger($msg, $level = 0) {
 	$loglevel = intval(Config::get('system','loglevel'));
 
 	if (
-		! $debugging
-		|| ! $logfile
+		!$debugging
+		|| !$logfile
 		|| $level > $loglevel
 	) {
 		return;
@@ -709,14 +682,14 @@ function dlogger($msg, $level = 0) {
 
 	// turn off logger in install mode
 	if (
-		$a->module == 'install'
+		$a->mode == App::MODE_INSTALL
 		|| !dba::$connected
 	) {
 		return;
 	}
 
 	$logfile = Config::get('system', 'dlogfile');
-	if (! $logfile) {
+	if (!$logfile) {
 		return;
 	}
 
@@ -961,13 +934,9 @@ function micropro($contact, $redirect = false, $class = '', $textmode = false) {
 	$redir = false;
 
 	if ($redirect) {
-		$redirect_url = 'redir/' . $contact['id'];
-		if (local_user() && ($contact['uid'] == local_user()) && ($contact['network'] === NETWORK_DFRN)) {
-			$redir = true;
-			$url = $redirect_url;
+		$url = Contact::magicLink($contact['url']);
+		if (strpos($url, 'redir/') === 0) {
 			$sparkle = ' sparkle';
-		} else {
-			$url = Profile::zrl($url);
 		}
 	}
 
@@ -1015,7 +984,7 @@ function search($s, $id = 'search-box', $url = 'search', $save = false, $aside =
 			'$action_url' => $url,
 			'$search_label' => L10n::t('Search'),
 			'$save_label' => $save_label,
-			'$savedsearch' => Feature::isEnabled(local_user(),'savedsearch'),
+			'$savedsearch' => local_user() && Feature::isEnabled(local_user(),'savedsearch'),
 			'$search_hint' => L10n::t('@name, !forum, #tags, content'),
 			'$mode' => $mode
 		];
@@ -1208,8 +1177,8 @@ function put_item_in_cache(&$item, $update = false)
 		}
 
 		if ($update && ($item["id"] > 0)) {
-			dba::update('item', ['rendered-html' => $item["rendered-html"], 'rendered-hash' => $item["rendered-hash"]],
-					['id' => $item["id"]], false);
+			Item::update(['rendered-html' => $item["rendered-html"], 'rendered-hash' => $item["rendered-hash"]],
+					['id' => $item["id"]]);
 		}
 	}
 
@@ -1234,12 +1203,6 @@ function prepare_body(array &$item, $attach = false, $is_preview = false)
 	$a = get_app();
 	Addon::callHooks('prepare_body_init', $item);
 
-	$searchpath = System::baseUrl() . "/search?tag=";
-
-	$tags = [];
-	$hashtags = [];
-	$mentions = [];
-
 	// In order to provide theme developers more possibilities, event items
 	// are treated differently.
 	if ($item['object-type'] === ACTIVITY_OBJ_EVENT && isset($item['event-id'])) {
@@ -1247,41 +1210,15 @@ function prepare_body(array &$item, $attach = false, $is_preview = false)
 		return $ev;
 	}
 
-	$taglist = dba::p("SELECT `type`, `term`, `url` FROM `term` WHERE `otype` = ? AND `oid` = ? AND `type` IN (?, ?) ORDER BY `tid`",
-			intval(TERM_OBJ_POST), intval($item['id']), intval(TERM_HASHTAG), intval(TERM_MENTION));
+	$tags = \Friendica\Model\Term::populateTagsFromItem($item);
 
-	while ($tag = dba::fetch($taglist)) {
-		if ($tag["url"] == "") {
-			$tag["url"] = $searchpath . strtolower($tag["term"]);
-		}
-
-		$orig_tag = $tag["url"];
-
-		$tag["url"] = best_link_url($item, $sp, $tag["url"]);
-
-		if ($tag["type"] == TERM_HASHTAG) {
-			if ($orig_tag != $tag["url"]) {
-				$item['body'] = str_replace($orig_tag, $tag["url"], $item['body']);
-			}
-
-			$hashtags[] = "#<a href=\"" . $tag["url"] . "\" target=\"_blank\">" . $tag["term"] . "</a>";
-			$prefix = "#";
-		} elseif ($tag["type"] == TERM_MENTION) {
-			$mentions[] = "@<a href=\"" . $tag["url"] . "\" target=\"_blank\">" . $tag["term"] . "</a>";
-			$prefix = "@";
-		}
-
-		$tags[] = $prefix . "<a href=\"" . $tag["url"] . "\" target=\"_blank\">" . $tag["term"] . "</a>";
-	}
-	dba::close($taglist);
-
-	$item['tags'] = $tags;
-	$item['hashtags'] = $hashtags;
-	$item['mentions'] = $mentions;
+	$item['tags'] = $tags['tags'];
+	$item['hashtags'] = $tags['hashtags'];
+	$item['mentions'] = $tags['mentions'];
 
 	// Compile eventual content filter reasons
 	$filter_reasons = [];
-	if (!$is_preview && !($item['self'] && local_user() == $item['uid'])) {
+	if (!$is_preview && public_contact() != $item['author-id']) {
 		if (!empty($item['content-warning']) && (!local_user() || !PConfig::get(local_user(), 'system', 'disable_cw', false))) {
 			$filter_reasons[] = L10n::t('Content warning: %s', $item['content-warning']);
 		}
@@ -1316,9 +1253,7 @@ function prepare_body(array &$item, $attach = false, $is_preview = false)
 	$s = $hook_data['html'];
 	unset($hook_data);
 
-	$s = apply_content_filter($s, $filter_reasons);
-
-	if (! $attach) {
+	if (!$attach) {
 		// Replace the blockquotes with quotes that are used in mails.
 		$mailquote = '<blockquote type="cite" class="gmail_quote" style="margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex;">';
 		$s = str_replace(['<blockquote>', '<blockquote class="spoiler">', '<blockquote class="author">'], [$mailquote, $mailquote, $mailquote], $s);
@@ -1332,11 +1267,7 @@ function prepare_body(array &$item, $attach = false, $is_preview = false)
 	foreach ($matches as $mtch) {
 		$mime = $mtch[3];
 
-		if ((local_user() == $item['uid']) && ($item['contact-id'] != $a->contact['id']) && ($item['network'] == NETWORK_DFRN)) {
-			$the_url = 'redir/' . $item['contact-id'] . '?f=1&url=' . $mtch[1];
-		} else {
-			$the_url = $mtch[1];
-		}
+		$the_url = Contact::magicLinkById($item['author-id'], $mtch[1]);
 
 		if (strpos($mime, 'video') !== false) {
 			if (!$vhead) {
@@ -1425,6 +1356,8 @@ function prepare_body(array &$item, $attach = false, $is_preview = false)
 		$s = preg_replace('|(<img[^>]+src="[^"]+/photo/[0-9a-f]+)-[0-9]|', "$1-" . $ps, $s);
 	}
 
+	$s = apply_content_filter($s, $filter_reasons);
+
 	$hook_data = ['item' => $item, 'html' => $s];
 	Addon::callHooks('prepare_body_final', $hook_data);
 
@@ -1443,18 +1376,13 @@ function prepare_body(array &$item, $attach = false, $is_preview = false)
 function apply_content_filter($html, array $reasons)
 {
 	if (count($reasons)) {
-		$rnd = random_string(8);
-		$content_filter_html = '<ul class="content-filter-reasons">';
-		foreach ($reasons as $reason) {
-			$content_filter_html .= '<li>' . htmlspecialchars($reason) . '</li>' . PHP_EOL;
-		}
-		$content_filter_html .= '</ul>
-			<p><span id="content-filter-wrap-' . $rnd . '" class="fakelink content-filter-button" onclick=openClose(\'content-filter-' . $rnd . '\'); >' .
-			L10n::t('Click to open/close') .
-			'</span></p>
-			<div id="content-filter-' . $rnd . '" class="content-filter-content" style="display: none;">';
-
-		$html = $content_filter_html . $html . '</div>';
+		$tpl = get_markup_template('wall/content_filter.tpl');
+		$html = replace_macros($tpl, [
+			'$reasons'   => $reasons,
+			'$rnd'       => random_string(8),
+			'$openclose' => L10n::t('Click to open/close'),
+			'$html'      => $html
+		]);
 	}
 
 	return $html;
@@ -1625,7 +1553,7 @@ function generate_user_guid() {
 		$x = q("SELECT `uid` FROM `user` WHERE `guid` = '%s' LIMIT 1",
 			dbesc($guid)
 		);
-		if (! DBM::is_result($x)) {
+		if (!DBM::is_result($x)) {
 			$found = false;
 		}
 	} while ($found == true);
@@ -1667,7 +1595,7 @@ function base64url_decode($s) {
  *  // Uncomment if you find you need it.
  *
  *	$l = strlen($s);
- *	if (! strpos($s,'=')) {
+ *	if (!strpos($s,'=')) {
  *		$m = $l % 4;
  *		if ($m == 2)
  *			$s .= '==';
@@ -1697,10 +1625,11 @@ function bb_translate_video($s) {
 	$r = preg_match_all("/\[video\](.*?)\[\/video\]/ism",$s,$matches,PREG_SET_ORDER);
 	if ($r) {
 		foreach ($matches as $mtch) {
-			if ((stristr($mtch[1],'youtube')) || (stristr($mtch[1],'youtu.be')))
-				$s = str_replace($mtch[0],'[youtube]' . $mtch[1] . '[/youtube]',$s);
-			elseif (stristr($mtch[1],'vimeo'))
-				$s = str_replace($mtch[0],'[vimeo]' . $mtch[1] . '[/vimeo]',$s);
+			if ((stristr($mtch[1], 'youtube')) || (stristr($mtch[1], 'youtu.be'))) {
+				$s = str_replace($mtch[0], '[youtube]' . $mtch[1] . '[/youtube]', $s);
+			} elseif (stristr($mtch[1], 'vimeo')) {
+				$s = str_replace($mtch[0], '[vimeo]' . $mtch[1] . '[/vimeo]', $s);
+			}
 		}
 	}
 	return $s;
@@ -1818,7 +1747,7 @@ function file_tag_file_query($table,$s,$type = 'file') {
 }
 
 // ex. given music,video return <music><video> or [music][video]
-function file_tag_list_to_file($list,$type = 'file') {
+function file_tag_list_to_file($list, $type = 'file') {
 	$tag_list = '';
 	if (strlen($list)) {
 		$list_array = explode(",",$list);
@@ -1840,7 +1769,7 @@ function file_tag_list_to_file($list,$type = 'file') {
 }
 
 // ex. given <music><video>[friends], return music,video or friends
-function file_tag_file_to_list($file,$type = 'file') {
+function file_tag_file_to_list($file, $type = 'file') {
 	$matches = false;
 	$list = '';
 	if ($type == 'file') {
@@ -1866,8 +1795,7 @@ function file_tag_update_pconfig($uid, $file_old, $file_new, $type = 'file') {
 
 	if (!intval($uid)) {
 		return false;
-	}
-	if ($file_old == $file_new) {
+	} elseif ($file_old == $file_new) {
 		return true;
 	}
 
@@ -1890,8 +1818,9 @@ function file_tag_update_pconfig($uid, $file_old, $file_new, $type = 'file') {
 		$check_new_tags = explode(",",file_tag_file_to_list($file_new,$type));
 
 		foreach ($check_new_tags as $tag) {
-			if (! stristr($saved,$lbracket . file_tag_encode($tag) . $rbracket))
+			if (!stristr($saved,$lbracket . file_tag_encode($tag) . $rbracket)) {
 				$new_tags[] = $tag;
+			}
 		}
 
 		$filetags_updated .= file_tag_list_to_file(implode(",",$new_tags),$type);
@@ -1901,8 +1830,9 @@ function file_tag_update_pconfig($uid, $file_old, $file_new, $type = 'file') {
 		$check_deleted_tags = explode(",",file_tag_file_to_list($file_old,$type));
 
 		foreach ($check_deleted_tags as $tag) {
-			if (! stristr($file_new,$lbracket . file_tag_encode($tag) . $rbracket))
+			if (!stristr($file_new,$lbracket . file_tag_encode($tag) . $rbracket)) {
 				$deleted_tags[] = $tag;
+			}
 		}
 
 		foreach ($deleted_tags as $key => $tag) {
@@ -1929,20 +1859,17 @@ function file_tag_update_pconfig($uid, $file_old, $file_new, $type = 'file') {
 	return true;
 }
 
-function file_tag_save_file($uid, $item, $file)
+function file_tag_save_file($uid, $item_id, $file)
 {
-	if (! intval($uid)) {
+	if (!intval($uid)) {
 		return false;
 	}
 
-	$r = q("SELECT `file` FROM `item` WHERE `id` = %d AND `uid` = %d LIMIT 1",
-		intval($item),
-		intval($uid)
-	);
-	if (DBM::is_result($r)) {
-		if (!stristr($r[0]['file'],'[' . file_tag_encode($file) . ']')) {
-			$fields = ['file' => $r[0]['file'] . '[' . file_tag_encode($file) . ']'];
-			Item::update($fields, ['id' => $item]);
+	$item = Item::selectFirst(['file'], ['id' => $item_id, 'uid' => $uid]);
+	if (DBM::is_result($item)) {
+		if (!stristr($item['file'],'[' . file_tag_encode($file) . ']')) {
+			$fields = ['file' => $item['file'] . '[' . file_tag_encode($file) . ']'];
+			Item::update($fields, ['id' => $item_id]);
 		}
 		$saved = PConfig::get($uid, 'system', 'filetags');
 		if (!strlen($saved) || !stristr($saved, '[' . file_tag_encode($file) . ']')) {
@@ -1953,9 +1880,9 @@ function file_tag_save_file($uid, $item, $file)
 	return true;
 }
 
-function file_tag_unsave_file($uid, $item, $file, $cat = false)
+function file_tag_unsave_file($uid, $item_id, $file, $cat = false)
 {
-	if (! intval($uid)) {
+	if (!intval($uid)) {
 		return false;
 	}
 
@@ -1967,16 +1894,13 @@ function file_tag_unsave_file($uid, $item, $file, $cat = false)
 		$termtype = TERM_FILE;
 	}
 
-	$r = q("SELECT `file` FROM `item` WHERE `id` = %d AND `uid` = %d LIMIT 1",
-		intval($item),
-		intval($uid)
-	);
-	if (! DBM::is_result($r)) {
+	$item = Item::selectFirst(['file'], ['id' => $item_id, 'uid' => $uid]);
+	if (!DBM::is_result($item)) {
 		return false;
 	}
 
-	$fields = ['file' => str_replace($pattern,'',$r[0]['file'])];
-	Item::update($fields, ['id' => $item]);
+	$fields = ['file' => str_replace($pattern,'',$item['file'])];
+	Item::update($fields, ['id' => $item_id]);
 
 	$r = q("SELECT `oid` FROM `term` WHERE `term` = '%s' AND `otype` = %d AND `type` = %d AND `uid` = %d",
 		dbesc($file),
@@ -2002,6 +1926,10 @@ function undo_post_tagging($s) {
 	$cnt = preg_match_all('/([!#@])\[url=(.*?)\](.*?)\[\/url\]/ism', $s, $matches, PREG_SET_ORDER);
 	if ($cnt) {
 		foreach ($matches as $mtch) {
+			if (in_array($mtch[1], ['!', '@'])) {
+				$contact = Contact::getDetailsByURL($mtch[2]);
+				$mtch[3] = empty($contact['addr']) ? $mtch[2] : $contact['addr'];
+			}
 			$s = str_replace($mtch[0], $mtch[1] . $mtch[3],$s);
 		}
 	}
@@ -2012,17 +1940,22 @@ function protect_sprintf($s) {
 	return str_replace('%', '%%', $s);
 }
 
-
+/// @TODO Rewrite this
 function is_a_date_arg($s) {
 	$i = intval($s);
+
 	if ($i > 1900) {
 		$y = date('Y');
+
 		if ($i <= $y + 1 && strpos($s, '-') == 4) {
-			$m = intval(substr($s,5));
-			if ($m > 0 && $m <= 12)
+			$m = intval(substr($s, 5));
+
+			if ($m > 0 && $m <= 12) {
 				return true;
+			}
 		}
 	}
+
 	return false;
 }
 
@@ -2031,6 +1964,7 @@ function is_a_date_arg($s) {
  */
 function deindent($text, $chr = "[\t ]", $count = NULL) {
 	$lines = explode("\n", $text);
+
 	if (is_null($count)) {
 		$m = [];
 		$k = 0;
@@ -2040,6 +1974,7 @@ function deindent($text, $chr = "[\t ]", $count = NULL) {
 		preg_match("|^" . $chr . "*|", $lines[$k], $m);
 		$count = strlen($m[0]);
 	}
+
 	for ($k = 0; $k < count($lines); $k++) {
 		$lines[$k] = preg_replace("|^" . $chr . "{" . $count . "}|", "", $lines[$k]);
 	}

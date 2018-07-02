@@ -17,6 +17,7 @@ use Friendica\Core\Config;
 use Friendica\Core\PConfig;
 use Friendica\Core\System;
 use Friendica\Database\DBM;
+use Friendica\Model\Contact;
 use Friendica\Model\GContact;
 use Friendica\Model\Profile;
 
@@ -153,7 +154,6 @@ function vier_community_info()
 			foreach ($r as $rr) {
 				$entry = replace_macros($tpl, [
 					'$id' => $rr['id'],
-					//'$profile_link' => Profile::zrl($rr['url']),
 					'$profile_link' => 'follow/?url='.urlencode($rr['url']),
 					'$photo' => proxy_url($rr['photo'], false, PROXY_SIZE_MICRO),
 					'$alt_text' => $rr['name'],
@@ -196,19 +196,18 @@ function vier_community_info()
 	//right_aside FIND FRIENDS
 	if ($show_friends && local_user()) {
 		$nv = [];
-		$nv['title'] = ["", L10n::t('Find Friends'), "", ""];
-		$nv['directory'] = ['directory', L10n::t('Local Directory'), "", ""];
-		$nv['global_directory'] = [get_server(), L10n::t('Global Directory'), "", ""];
-		$nv['match'] = ['match', L10n::t('Similar Interests'), "", ""];
-		$nv['suggest'] = ['suggest', L10n::t('Friend Suggestions'), "", ""];
-		$nv['invite'] = ['invite', L10n::t('Invite Friends'), "", ""];
-
-		$nv['search'] = '<form name="simple_bar" method="get" action="dirfind">
-						<span class="sbox_l"></span>
-						<span class="sbox">
-						<input type="text" name="search" size="13" maxlength="50">
-						</span>
-						<span class="sbox_r" id="srch_clear"></span>';
+		$nv['findpeople'] = L10n::t('Find People');
+		$nv['desc'] = L10n::t('Enter name or interest');
+		$nv['label'] = L10n::t('Connect/Follow');
+		$nv['hint'] = L10n::t('Examples: Robert Morgenstein, Fishing');
+		$nv['findthem'] = L10n::t('Find');
+		$nv['suggest'] = L10n::t('Friend Suggestions');
+		$nv['similar'] = L10n::t('Similar Interests');
+		$nv['random'] = L10n::t('Random Profile');
+		$nv['inv'] = L10n::t('Invite Friends');
+		$nv['directory'] = L10n::t('Global Directory');
+		$nv['global_dir'] = get_server();
+		$nv['local_directory'] = L10n::t('Local Directory');
 
 		$aside['$nv'] = $nv;
 	}
@@ -235,7 +234,7 @@ function vier_community_info()
 
 				$entry = [
 					'url'          => 'network?f=&cid=' . $contact['id'],
-					'external_url' => 'redir/' . $contact['id'],
+					'external_url' => Contact::magicLink($contact['url']),
 					'name'         => $contact['name'],
 					'cid'          => $contact['id'],
 					'selected'     => $selected,
@@ -286,7 +285,7 @@ function vier_community_info()
 		}
 
 		foreach ($r as $index => $helper) {
-			$r[$index]["url"] = Profile::zrl($helper["url"]);
+			$r[$index]["url"] = Contact::magicLink($helper["url"]);
 		}
 
 		$r[] = ["url" => "help/Quick-Start-guide", "name" => L10n::t("Quick Start")];

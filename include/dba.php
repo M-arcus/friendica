@@ -1,5 +1,6 @@
 <?php
 
+use Friendica\App;
 use Friendica\Core\L10n;
 use Friendica\Core\System;
 use Friendica\Database\DBM;
@@ -22,16 +23,27 @@ class dba {
 	private static $errorno = 0;
 	private static $affected_rows = 0;
 	private static $in_transaction = false;
+	private static $in_retrial = false;
 	private static $relation = [];
+	private static $db_serveraddr = '';
+	private static $db_user = '';
+	private static $db_pass = '';
+	private static $db_name = '';
 
-	public static function connect($serveraddr, $user, $pass, $db, $install = false) {
-		if (!is_null(self::$db)) {
+	public static function connect($serveraddr, $user, $pass, $db) {
+		if (!is_null(self::$db) && self::connected()) {
 			return true;
 		}
 
 		$a = get_app();
 
 		$stamp1 = microtime(true);
+
+		// We are storing these values for being able to perform a reconnect
+		self::$db_serveraddr = $serveraddr;
+		self::$db_user = $user;
+		self::$db_pass = $pass;
+		self::$db_name = $db;
 
 		$serveraddr = trim($serveraddr);
 
@@ -51,15 +63,6 @@ class dba {
 			return false;
 		}
 
-		if ($install) {
-			if (strlen($server) && ($server !== 'localhost') && ($server !== '127.0.0.1')) {
-				if (! dns_get_record($server, DNS_A + DNS_CNAME + DNS_PTR)) {
-					self::$error = L10n::t('Cannot locate DNS info for database server \'%s\'', $server);
-					return false;
-				}
-			}
-		}
-
 		if (class_exists('\PDO') && in_array('mysql', PDO::getAvailableDrivers())) {
 			self::$driver = 'pdo';
 			$connect = "mysql:host=".$server.";dbname=".$db;
@@ -73,6 +76,7 @@ class dba {
 			}
 			try {
 				self::$db = @new PDO($connect, $user, $pass);
+				self::$db->setAttribute(PDO::ATTR_EMULATE_PREPARES, false);
 				self::$connected = true;
 			} catch (PDOException $e) {
 			}
@@ -92,11 +96,51 @@ class dba {
 
 		// No suitable SQL driver was found.
 		if (!self::$connected) {
+			self::$driver = null;
 			self::$db = null;
 		}
 		$a->save_timestamp($stamp1, "network");
 
 		return self::$connected;
+	}
+
+	/**
+	 * Disconnects the current database connection
+	 */
+	public static function disconnect()
+	{
+		if (is_null(self::$db)) {
+			return;
+		}
+
+		switch (self::$driver) {
+			case 'pdo':
+				self::$db = null;
+				break;
+			case 'mysqli':
+				self::$db->close();
+				self::$db = null;
+				break;
+		}
+	}
+
+	/**
+	 * Perform a reconnect of an existing database connection
+	 */
+	public static function reconnect() {
+		self::disconnect();
+
+		$ret = self::connect(self::$db_serveraddr, self::$db_user, self::$db_pass, self::$db_name);
+		return $ret;
+	}
+
+	/**
+	 * Return the database object.
+	 * @return PDO|mysqli
+	 */
+	public static function get_db()
+	{
+		return self::$db;
 	}
 
 	/**
@@ -128,7 +172,7 @@ class dba {
 	 */
 	public static function database_name() {
 		$ret = self::p("SELECT DATABASE() AS `db`");
-                $data = self::inArray($ret);
+		$data = self::inArray($ret);
 		return $data[0]['db'];
 	}
 
@@ -306,7 +350,7 @@ class dba {
 	 * For all regular queries please use dba::select or dba::exists
 	 *
 	 * @param string $sql SQL statement
-	 * @return bool|object statement object
+	 * @return bool|object statement object or result object
 	 */
 	public static function p($sql) {
 		$a = get_app();
@@ -384,7 +428,12 @@ class dba {
 				}
 
 				foreach ($args AS $param => $value) {
-					$stmt->bindParam($param, $args[$param]);
+					if (is_int($args[$param])) {
+						$data_type = PDO::PARAM_INT;
+					} else {
+						$data_type = PDO::PARAM_STR;
+					}
+					$stmt->bindParam($param, $args[$param], $data_type);
 				}
 
 				if (!$stmt->execute()) {
@@ -429,23 +478,23 @@ class dba {
 					break;
 				}
 
-				$params = '';
+				$param_types = '';
 				$values = [];
 				foreach ($args AS $param => $value) {
 					if (is_int($args[$param])) {
-						$params .= 'i';
+						$param_types .= 'i';
 					} elseif (is_float($args[$param])) {
-						$params .= 'd';
+						$param_types .= 'd';
 					} elseif (is_string($args[$param])) {
-						$params .= 's';
+						$param_types .= 's';
 					} else {
-						$params .= 'b';
+						$param_types .= 'b';
 					}
 					$values[] = &$args[$param];
 				}
 
 				if (count($values) > 0) {
-					array_unshift($values, $params);
+					array_unshift($values, $param_types);
 					call_user_func_array([$stmt, 'bind_param'], $values);
 				}
 
@@ -468,7 +517,27 @@ class dba {
 			$errorno = self::$errorno;
 
 			logger('DB Error '.self::$errorno.': '.self::$error."\n".
-				System::callstack(8)."\n".self::replaceParameters($sql, $params));
+				System::callstack(8)."\n".self::replaceParameters($sql, $args));
+
+			// On a lost connection we try to reconnect - but only once.
+			if ($errorno == 2006) {
+				if (self::$in_retrial || !self::reconnect()) {
+					// It doesn't make sense to continue when the database connection was lost
+					if (self::$in_retrial) {
+						logger('Giving up retrial because of database error '.$errorno.': '.$error);
+					} else {
+						logger("Couldn't reconnect after database error ".$errorno.': '.$error);
+					}
+					exit(1);
+				} else {
+					// We try it again
+					logger('Reconnected after database error '.$errorno.': '.$error);
+					self::$in_retrial = true;
+					$ret = self::p($sql, $args);
+					self::$in_retrial = false;
+					return $ret;
+				}
+			}
 
 			self::$error = $error;
 			self::$errorno = $errorno;
@@ -534,6 +603,13 @@ class dba {
 
 			logger('DB Error '.self::$errorno.': '.self::$error."\n".
 				System::callstack(8)."\n".self::replaceParameters($sql, $params));
+
+			// On a lost connection we simply quit.
+			// A reconnect like in self::p could be dangerous with modifications
+			if ($errorno == 2006) {
+				logger('Giving up because of database error '.$errorno.': '.$error);
+				exit(1);
+			}
 
 			self::$error = $error;
 			self::$errorno = $errorno;
@@ -765,10 +841,25 @@ class dba {
 	 */
 	public static function lock($table) {
 		// See here: https://dev.mysql.com/doc/refman/5.7/en/lock-tables-and-transactions.html
-		self::e("SET autocommit=0");
+		if (self::$driver == 'pdo') {
+			self::e("SET autocommit=0");
+			self::$db->setAttribute(PDO::ATTR_EMULATE_PREPARES, true);
+		} else {
+			self::$db->autocommit(false);
+		}
+
 		$success = self::e("LOCK TABLES `".self::escape($table)."` WRITE");
+
+		if (self::$driver == 'pdo') {
+			self::$db->setAttribute(PDO::ATTR_EMULATE_PREPARES, false);
+		}
+
 		if (!$success) {
-			self::e("SET autocommit=1");
+			if (self::$driver == 'pdo') {
+				self::e("SET autocommit=1");
+			} else {
+				self::$db->autocommit(true);
+			}
 		} else {
 			self::$in_transaction = true;
 		}
@@ -782,9 +873,21 @@ class dba {
 	 */
 	public static function unlock() {
 		// See here: https://dev.mysql.com/doc/refman/5.7/en/lock-tables-and-transactions.html
-		self::e("COMMIT");
+		self::performCommit();
+
+		if (self::$driver == 'pdo') {
+			self::$db->setAttribute(PDO::ATTR_EMULATE_PREPARES, true);
+		}
+
 		$success = self::e("UNLOCK TABLES");
-		self::e("SET autocommit=1");
+
+		if (self::$driver == 'pdo') {
+			self::$db->setAttribute(PDO::ATTR_EMULATE_PREPARES, false);
+			self::e("SET autocommit=1");
+		} else {
+			self::$db->autocommit(true);
+		}
+
 		self::$in_transaction = false;
 		return $success;
 	}
@@ -795,13 +898,41 @@ class dba {
 	 * @return boolean Was the command executed successfully?
 	 */
 	public static function transaction() {
-		if (!self::e('COMMIT')) {
+		if (!self::performCommit()) {
 			return false;
 		}
-		if (!self::e('START TRANSACTION')) {
-			return false;
+
+		switch (self::$driver) {
+			case 'pdo':
+				if (self::$db->inTransaction()) {
+					break;
+				}
+				if (!self::$db->beginTransaction()) {
+					return false;
+				}
+				break;
+			case 'mysqli':
+				if (!self::$db->begin_transaction()) {
+					return false;
+				}
+				break;
 		}
+
 		self::$in_transaction = true;
+		return true;
+	}
+
+	private static function performCommit()
+	{
+		switch (self::$driver) {
+			case 'pdo':
+				if (!self::$db->inTransaction()) {
+					return true;
+				}
+				return self::$db->commit();
+			case 'mysqli':
+				return self::$db->commit();
+		}
 		return true;
 	}
 
@@ -811,7 +942,7 @@ class dba {
 	 * @return boolean Was the command executed successfully?
 	 */
 	public static function commit() {
-		if (!self::e('COMMIT')) {
+		if (!self::performCommit()) {
 			return false;
 		}
 		self::$in_transaction = false;
@@ -824,11 +955,20 @@ class dba {
 	 * @return boolean Was the command executed successfully?
 	 */
 	public static function rollback() {
-		if (!self::e('ROLLBACK')) {
-			return false;
+		switch (self::$driver) {
+			case 'pdo':
+				if (!self::$db->inTransaction()) {
+					$ret = true;
+					break;
+				}
+				$ret = self::$db->rollBack();
+				break;
+			case 'mysqli':
+				$ret = self::$db->rollback();
+				break;
 		}
 		self::$in_transaction = false;
-		return true;
+		return $ret;
 	}
 
 	/**
@@ -857,12 +997,15 @@ class dba {
 	 *
 	 * @param string  $table       Table name
 	 * @param array   $conditions  Field condition(s)
+	 * @param array   $options
+	 *                - cascade: If true we delete records in other tables that depend on the one we're deleting through
+	 *                           relations (default: true)
 	 * @param boolean $in_process  Internal use: Only do a commit after the last delete
 	 * @param array   $callstack   Internal use: prevent endless loops
 	 *
 	 * @return boolean|array was the delete successful? When $in_process is set: deletion data
 	 */
-	public static function delete($table, array $conditions, $in_process = false, array &$callstack = [])
+	public static function delete($table, array $conditions, array $options = [], $in_process = false, array &$callstack = [])
 	{
 		if (empty($table) || empty($conditions)) {
 			logger('Table and conditions have to be set');
@@ -885,13 +1028,15 @@ class dba {
 
 		$commands[$key] = ['table' => $table, 'conditions' => $conditions];
 
+		$cascade = defaults($options, 'cascade', true);
+
 		// To speed up the whole process we cache the table relations
-		if (count(self::$relation) == 0) {
+		if ($cascade && count(self::$relation) == 0) {
 			self::buildRelationData();
 		}
 
 		// Is there a relation entry for the table?
-		if (isset(self::$relation[$table])) {
+		if ($cascade && isset(self::$relation[$table])) {
 			// We only allow a simple "one field" relation.
 			$field = array_keys(self::$relation[$table])[0];
 			$rel_def = array_values(self::$relation[$table])[0];
@@ -904,7 +1049,7 @@ class dba {
 			if ((count($conditions) == 1) && ($field == array_keys($conditions)[0])) {
 				foreach ($rel_def AS $rel_table => $rel_fields) {
 					foreach ($rel_fields AS $rel_field) {
-						$retval = self::delete($rel_table, [$rel_field => array_values($conditions)[0]], true, $callstack);
+						$retval = self::delete($rel_table, [$rel_field => array_values($conditions)[0]], $options, true, $callstack);
 						$commands = array_merge($commands, $retval);
 					}
 				}
@@ -918,7 +1063,7 @@ class dba {
 
 				while ($row = self::fetch($data)) {
 					// Now we accumulate the delete commands
-					$retval = self::delete($table, [$field => $row[$field]], true, $callstack);
+					$retval = self::delete($table, [$field => $row[$field]], $options, true, $callstack);
 					$commands = array_merge($commands, $retval);
 				}
 
@@ -965,7 +1110,7 @@ class dba {
 					// Split the SQL queries in chunks of 100 values
 					// We do the $i stuff here to make the code better readable
 					$i = $counter[$key_table][$key_condition];
-					if (count($compacted[$key_table][$key_condition][$i]) > 100) {
+					if (isset($compacted[$key_table][$key_condition][$i]) && count($compacted[$key_table][$key_condition][$i]) > 100) {
 						++$i;
 					}
 
@@ -1141,29 +1286,9 @@ class dba {
 
 		$condition_string = self::buildCondition($condition);
 
-		$order_string = '';
-		if (isset($params['order'])) {
-			$order_string = " ORDER BY ";
-			foreach ($params['order'] AS $fields => $order) {
-				if (!is_int($fields)) {
-					$order_string .= "`" . $fields . "` " . ($order ? "DESC" : "ASC") . ", ";
-				} else {
-					$order_string .= "`" . $order . "`, ";
-				}
-			}
-			$order_string = substr($order_string, 0, -2);
-		}
+		$param_string = self::buildParameter($params);
 
-		$limit_string = '';
-		if (isset($params['limit']) && is_int($params['limit'])) {
-			$limit_string = " LIMIT " . $params['limit'];
-		}
-
-		if (isset($params['limit']) && is_array($params['limit'])) {
-			$limit_string = " LIMIT " . intval($params['limit'][0]) . ", " . intval($params['limit'][1]);
-		}
-
-		$sql = "SELECT " . $select_fields . " FROM `" . $table . "`" . $condition_string . $order_string . $limit_string;
+		$sql = "SELECT " . $select_fields . " FROM `" . $table . "`" . $condition_string . $param_string;
 
 		$result = self::p($sql, $condition);
 
@@ -1220,14 +1345,14 @@ class dba {
 	 * @param array $condition
 	 * @return string
 	 */
-	private static function buildCondition(array &$condition = [])
+	public static function buildCondition(array &$condition = [])
 	{
 		$condition_string = '';
 		if (count($condition) > 0) {
 			reset($condition);
 			$first_key = key($condition);
 			if (is_int($first_key)) {
-				$condition_string = " WHERE ".array_shift($condition);
+				$condition_string = " WHERE (" . array_shift($condition) . ")";
 			} else {
 				$new_values = [];
 				$condition_string = "";
@@ -1236,6 +1361,30 @@ class dba {
 						$condition_string .= " AND ";
 					}
 					if (is_array($value)) {
+						/* Workaround for MySQL Bug #64791.
+						 * Never mix data types inside any IN() condition.
+						 * In case of mixed types, cast all as string.
+						 * Logic needs to be consistent with dba::p() data types.
+						 */
+						$is_int = false;
+						$is_alpha = false;
+						foreach ($value as $single_value) {
+							if (is_int($single_value)) {
+								$is_int = true;
+							} else {
+								$is_alpha = true;
+							}
+						}
+						
+						if ($is_int && $is_alpha) {
+							foreach ($value as &$ref) {
+								if (is_int($ref)) {
+									$ref = (string)$ref;
+								}
+							}
+							unset($ref); //Prevent accidental re-use.
+						}
+
 						$new_values = array_merge($new_values, array_values($value));
 						$placeholders = substr(str_repeat("?, ", count($value)), 0, -2);
 						$condition_string .= "`" . $field . "` IN (" . $placeholders . ")";
@@ -1244,12 +1393,45 @@ class dba {
 						$condition_string .= "`" . $field . "` = ?";
 					}
 				}
-				$condition_string = " WHERE " . $condition_string;
+				$condition_string = " WHERE (" . $condition_string . ")";
 				$condition = $new_values;
 			}
 		}
 
 		return $condition_string;
+	}
+
+	/**
+	 * @brief Returns the SQL parameter string built from the provided parameter array
+	 *
+	 * @param array $params
+	 * @return string
+	 */
+	public static function buildParameter(array $params = [])
+	{
+		$order_string = '';
+		if (isset($params['order'])) {
+			$order_string = " ORDER BY ";
+			foreach ($params['order'] AS $fields => $order) {
+				if (!is_int($fields)) {
+					$order_string .= "`" . $fields . "` " . ($order ? "DESC" : "ASC") . ", ";
+				} else {
+					$order_string .= "`" . $order . "`, ";
+				}
+			}
+			$order_string = substr($order_string, 0, -2);
+		}
+
+		$limit_string = '';
+		if (isset($params['limit']) && is_int($params['limit'])) {
+			$limit_string = " LIMIT " . $params['limit'];
+		}
+
+		if (isset($params['limit']) && is_array($params['limit'])) {
+			$limit_string = " LIMIT " . intval($params['limit'][0]) . ", " . intval($params['limit'][1]);
+		}
+
+		return $order_string.$limit_string;
 	}
 
 	/**
@@ -1311,8 +1493,18 @@ class dba {
 				$ret = $stmt->closeCursor();
 				break;
 			case 'mysqli':
-				$stmt->free_result();
-				$ret = $stmt->close();
+				// MySQLi offers both a mysqli_stmt and a mysqli_result class.
+				// We should be careful not to assume the object type of $stmt
+				// because dba::p() has been able to return both types.
+				if ($stmt instanceof mysqli_stmt) {
+					$stmt->free_result();
+					$ret = $stmt->close();
+				} elseif ($stmt instanceof mysqli_result) {
+					$stmt->free();
+					$ret = true;
+				} else {
+					$ret = false;
+				}
 				break;
 		}
 

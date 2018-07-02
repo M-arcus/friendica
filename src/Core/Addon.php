@@ -228,14 +228,15 @@ class Addon
 	/**
 	 * @brief Calls a single hook.
 	 *
-	 * @param string $name of the hook to call
-	 * @param array $hook Hook data
-	 * @param string|array &$data to transmit to the callback handler
+	 * @param \Friendica\App $a
+	 * @param string         $name of the hook to call
+	 * @param array          $hook Hook data
+	 * @param string|array   &$data to transmit to the callback handler
 	 */
-	public static function callSingleHook($a, $name, $hook, &$data = null)
+	public static function callSingleHook(\Friendica\App $a, $name, $hook, &$data = null)
 	{
 		// Don't run a theme's hook if the user isn't using the theme
-		if (strpos($hook[0], 'view/theme/') !== false && strpos($hook[0], 'view/theme/'.current_theme()) === false) {
+		if (strpos($hook[0], 'view/theme/') !== false && strpos($hook[0], 'view/theme/' . $a->getCurrentTheme()) === false) {
 			return;
 		}
 
@@ -246,7 +247,7 @@ class Addon
 		} else {
 			// remove orphan hooks
 			$condition = ['hook' => $name, 'file' => $hook[0], 'function' => $hook[1]];
-			dba::delete('hook', $condition);
+			dba::delete('hook', $condition, ['cascade' => false]);
 		}
 	}
 

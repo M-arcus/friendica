@@ -1,8 +1,11 @@
 23n
 Abinoam P. Marques Jr.
 Abrax
+Adam Clark
 Adam Jurkiewicz
 Adam Magness
+Aditoo
+AgnesElisa
 Albert
 Alberto Díaz Tormo
 Alex
@@ -10,14 +13,17 @@ Alexander Fortin
 Alexander Kampmann
 Alexandre Alapetite
 AlfredSK
+Andi
 Andi Stadler
 Andreas H.
+Andreas Neustifter
 Andrej Stieben
 André Alves
 André Lohan
 Andy H3
 Andy Hee
 AndyHee
+Angristan
 Anthronaut
 Arian - Cazare Muncitori
 Athalbert
@@ -27,6 +33,8 @@ balderino
 Beanow
 beardyunixer
 Beatriz Vital
+Beluga
+Ben
 Ben Roberts
 ben-utzer
 bufalo1973
@@ -39,6 +47,7 @@ Christian González
 Christian M. Grube
 Christian Vogeley
 Cohan Robinson
+Copiis Praeesse
 Cyboulette
 Cyryl Sochacki
 czarnystokrotek
@@ -82,17 +91,20 @@ Gregory Smith
 Haakon Meland Eriksen
 Hans Meine
 hauke
+Hauke
 Hauke Altmann
 Hauke Zühl
 Herbert Thielen
 hoergen
 Hubert Kościański
 Hypolite Petovan
+Ilmari
 irhen
 Jak
 Jakob
 Jens Tautenhahn
 jensp
+Jeroen De Meerleer
 jeroenpraat
 Johannes Schwab
 John Brazil
@@ -100,20 +112,24 @@ Jonatan Nyberg
 Josef Moravek
 juanman
 julia.domagalska
-Karel Vandecandelaere
+Karel
 Karolina
 Keith Fernie
 Klaus Weidenbach
+Koyu Berteon
+Kris
 Lea1995polish
 Leberwurscht
 Leonard Lausen
 Lionel Triay
+Lorem Ipsum
 Ludovic Grossard
 maase2
 Magdalena Gazda
 Mai Anh Nguyen
 Manuel Pérez Monís
 Marcin Klessa
+Marcus Müller
 Mariusz Pisz
 marmor
 Marquis_de_Carabas
@@ -131,6 +147,7 @@ Michael Vogel
 Michal Šupler
 Michalina
 Mike Macgirvin
+miqrogroove
 mytbk
 Nicola Spanti
 Olaf Conradi
@@ -139,12 +156,16 @@ Olivier
 Olivier Mehani
 Olivier Migeot
 Paolo Wave
+Pascal
+Pascal Deklerck
 Pavel Morozov
-Perig Gouanvic
+PerigGouanvic
 peturisfeld
+Philipp Holzer
 Pierre Rudloff
 Piotr Blonkowski
 pokerazor
+R C
 Rabuzarus
 Radek
 Rafael Garau
@@ -158,9 +179,11 @@ Ricardo Pereira
 RJ Madsen
 Roland Häder
 Rui Andrada
+RyDroid
 S.Krumbholz
 Sakałoŭ Alaksiej
 Sam
+Samuli Valavuo
 Sandro Santilli
 Sebastian Egbers
 sella
@@ -180,6 +203,7 @@ szymon.filip
 Sérgio Lima
 Taekus
 Tazman DeVille
+teho
 Thecross
 Thomas
 Thomas Willingham
@@ -200,13 +224,17 @@ ufic
 Vasudev Kamath
 Vasya Novikov
 vislav
+VVelox
 Vít Šesták 'v6ak'
+Waldemar Stoczkowski
 Yasen Pramatarov
 ylms
 Zach Prezkuta
+Zane C. Bowers-Hadley
 Zered
 zotlabs
 zottel
 Zvi ben Yaakov (a.k.a rdc)
 Михаил
+Олексій Замковий
 朱陈锬

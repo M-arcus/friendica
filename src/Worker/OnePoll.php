@@ -78,7 +78,7 @@ class OnePoll
 					$last_updated = $contact['last-item'];
 				}
 
-				$fields = ['last-item' => $last_updated, 'last-update' => $updated, 'success_update' => $updated];
+				$fields = ['last-item' => DateTimeFormat::utc($last_updated), 'last-update' => $updated, 'success_update' => $updated];
 				self::updateContact($contact, $fields);
 				Contact::unmarkForArchival($contact);
 			} else {
@@ -309,7 +309,7 @@ class OnePoll
 
 			// Are we allowed to import from this person?
 
-			if ($contact['rel'] == CONTACT_IS_FOLLOWER || $contact['blocked'] || $contact['readonly']) {
+			if ($contact['rel'] == CONTACT_IS_FOLLOWER || $contact['blocked']) {
 				// set the last-update so we don't keep polling
 				dba::update('contact', ['last-update' => DateTimeFormat::utcNow()], ['id' => $contact['id']]);
 				return;
@@ -389,7 +389,7 @@ class OnePoll
 							// Have we seen it before?
 							$fields = ['deleted', 'id'];
 							$condition = ['uid' => $importer_uid, 'uri' => $datarray['uri']];
-							$item = dba::selectFirst('item', $fields, $condition);
+							$item = Item::selectFirst($fields, $condition);
 							if (DBM::is_result($item)) {
 								logger("Mail: Seen before ".$msg_uid." for ".$mailconf['user']." UID: ".$importer_uid." URI: ".$datarray['uri'],LOGGER_DEBUG);
 
@@ -435,15 +435,13 @@ class OnePoll
 								$refs_arr = explode(' ', $raw_refs);
 								if (count($refs_arr)) {
 									for ($x = 0; $x < count($refs_arr); $x ++) {
-										$refs_arr[$x] = "'" . Email::msgid2iri(str_replace(['<', '>', ' '],['', '', ''],dbesc($refs_arr[$x]))) . "'";
+										$refs_arr[$x] = Email::msgid2iri(str_replace(['<', '>', ' '],['', '', ''], $refs_arr[$x]));
 									}
 								}
-								$qstr = implode(',', $refs_arr);
-								$r = q("SELECT `parent-uri` FROM `item` USE INDEX (`uid_uri`) WHERE `uri` IN ($qstr) AND `uid` = %d LIMIT 1",
-									intval($importer_uid)
-								);
-								if (DBM::is_result($r)) {
-									$datarray['parent-uri'] = $r[0]['parent-uri'];  // Set the parent as the top-level item
+								$condition = ['uri' => $refs_arr, 'uid' => $importer_uid];
+								$parent = Item::selectFirst(['parent-uri'], $condition);
+								if (DBM::is_result($parent)) {
+									$datarray['parent-uri'] = $parent['parent-uri'];  // Set the parent as the top-level item
 								}
 							}
 
@@ -472,12 +470,11 @@ class OnePoll
 
 							// If it seems to be a reply but a header couldn't be found take the last message with matching subject
 							if (empty($datarray['parent-uri']) && $reply) {
-								$r = q("SELECT `parent-uri` FROM `item` WHERE `title` = \"%s\" AND `uid` = %d AND `network` = '%s' ORDER BY `created` DESC LIMIT 1",
-									dbesc(protect_sprintf($datarray['title'])),
-									intval($importer_uid),
-									dbesc(NETWORK_MAIL));
-								if (DBM::is_result($r)) {
-									$datarray['parent-uri'] = $r[0]['parent-uri'];
+								$condition = ['title' => $datarray['title'], 'uid' => importer_uid, 'network' => NETWORK_MAIL];
+								$params = ['order' => ['created' => true]];
+								$parent = Item::selectFirst(['parent-uri'], $condition, $params);
+								if (DBM::is_result($parent)) {
+									$datarray['parent-uri'] = $parent['parent-uri'];
 								}
 							}
 
@@ -590,7 +587,7 @@ class OnePoll
 			}
 
 			$hubmode = 'subscribe';
-			if ($contact['network'] === NETWORK_DFRN || $contact['blocked'] || $contact['readonly']) {
+			if ($contact['network'] === NETWORK_DFRN || $contact['blocked']) {
 				$hubmode = 'unsubscribe';
 			}
 

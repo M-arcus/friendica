@@ -36,6 +36,7 @@ Friendica - Dokumentation und Ressourcen
 * [Betreibe deine Seite mit einem SSL-Zertifikat](help/SSL)
 * [Konfigurationswerte, die nur in der .htconfig.php gesetzt werden können](help/htconfig) (EN)
 * [Performance verbessern](help/Improve-Performance)
+* [Administration Werkzeuge](help/tools) (EN)
 
 **Dokumentation für Entwickler**
 
@@ -55,6 +56,7 @@ Friendica - Dokumentation und Ressourcen
 * [Code-Referenz (mit doxygen generiert - setzt Cookies)](doc/html/)
 * [Twitter/GNU Social API Functions](help/api) (EN)
 * [Translation of Friendica](help/translations) (EN)
+* [Run tests](help/Tests) (EN)
 
 **Externe Ressourcen**
 
@@ -71,4 +73,3 @@ Friendica - Dokumentation und Ressourcen
 
 * [Seite/Friendica-Version](friendica)
 * [Mitwirkenden bei Friendica](credits)
-

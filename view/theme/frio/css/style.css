@@ -24,9 +24,10 @@ and open the template in the editor.
 
 body {
     padding-top: 110px;
-    background-color: $bgcolor;
+    background-color: $background_color;
     background-image: url("$background_image");
     background-size: $background_size_img;
+    background-repeat: $background_repeat;
     background-attachment: fixed;
     color: #777;
     /*color: #555;*/
@@ -98,7 +99,6 @@ blockquote {
 code {
     white-space: pre-wrap;
 }
-.help-content-wrapper code, .help-aside-wrapper code {display: inline}
 
 /**
  * mobile aside
@@ -1053,6 +1053,25 @@ aside > #datebrowse-sidebar .posted-date-selector-months > ul > li{
 }
 aside > #datebrowse-sidebar .posted-date-selector-months > ul > li:hover{
     padding-left: 27px;
+}
+
+/* help page widget */
+aside > .help-content-wrapper code, .help-aside-wrapper code {
+    display: inline
+}
+aside > .help-aside-wrapper p strong:first-child {
+    display: block;
+    margin: 1em 0 0em;
+}
+aside > .help-aside-wrapper h1 {
+    font-weight: bold;
+    font-size: 16px;
+    margin: 0;
+    padding: 20px 0 10px;
+}
+aside > .help-aside-wrapper h2 {
+    font-weight: bold;
+    font-size: 14px;
 }
 
 /* vcard / h-card */
@@ -2115,9 +2134,11 @@ ul.dropdown-menu li:hover {
 .allfriends-content-wrapper, .match-content-wrapper, .dirfind-content-wrapper,
 .directory-content-wrapper, .manage-content-wrapper, .notes-content-wrapper,
 .message-content-wrapper, .apps-content-wrapper, .photos-content-wrapper,
-#adminpage, .viewcontacts-content-wrapper, .dfrn_request-content-wrapper,
+#adminpage, .delegate-content-wrapper, .uexport-content-wrapper,
+.viewcontacts-content-wrapper, .dfrn_request-content-wrapper,
 .friendica-content-wrapper, .credits-content-wrapper, .nogroup-content-wrapper,
-.profperm-content-wrapper {
+.profperm-content-wrapper, .invite-content-wrapper, .tos-content-wrapper,
+.fsuggest-content-wrapper {
     min-height: calc(100vh - 150px);
     padding: 15px;
     padding-bottom: 20px;
@@ -2138,6 +2159,9 @@ ul.dropdown-menu li:hover {
     overflow: hidden;
 }
 /* Home and Login Page */
+body.mod-home nav.navbar .nav>li>a:hover {
+    background-color: rgba(255,255,255,0.2);
+}
 body.mod-home .navbar #nav-login,
 body.mod-login .navbar #nav-login {
     display: none;
@@ -2409,10 +2433,13 @@ ul li:hover .contact-wrapper .contact-action-link:hover {
     height: 48px;
     width: 48px;
 }
-
 #prvmail-end {
     clear:both;
 }
+#modal #prvmail-text-edit-bb .bb-img {
+    display: none;
+}
+
 /* photos */
 .photo-album-actions {
     margin-bottom: 10px;
@@ -2650,7 +2677,8 @@ ul li:hover .contact-wrapper .contact-action-link:hover {
     margin-left: -15px;
     margin-right: -15px;
 }
-.panel-group-settings > .panel {
+.panel-group-settings > .panel,
+.panel-group-settings > form > .panel {
     padding-left: 15px;
     padding-right: 15px;
 }
@@ -2788,7 +2816,7 @@ ul.notif-network-list > li:hover .intro-action-buttons {
 }
 .intro-desc-label, .intro-url-label, .intro-network-label,
 .intro-location-label, .intro-gender-label, .intro-keywords-label,
-.intro-about-label, .intro-knowyou-label {
+.intro-about-label, .intro-knowyou-label, .intro-madeby-label {
     font-weight: bold;
 }
 .intro-contact-info.xs .intro-url-label, .intro-contact-info.xs .intro-network-label,
@@ -2934,6 +2962,22 @@ section.help-content-wrapper li {
 }
 #adminpage .plugin .desc {
     padding-left: 10px;
+}
+.adminpage .admin-settings-action-link,
+.adminpage .admin-settings-action-link:hover {
+    color: #555;
+}
+.adminpage .admin-settings-action-link:hover {
+    opacity: 1;
+}
+.adminpage .admin-settings-action-link {
+    opacity: 0.8;
+}
+#admin-users tr.blocked {
+    background-color: #f8efc0;
+}
+.adminpage .table-hover > tbody > tr:hover + tr.details {
+    background-color: #f5f5f5;
 }
 
 /* Register Page*/
@@ -3115,12 +3159,30 @@ section .profile-match-wrapper {
  * Login page
  */
 #login-submit-wrapper {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    align-items: center;
+    float: right;
 }
 #lost-password-link { flex-grow: 2; }
+#login-lost-password-link {
+    margin-bottom: 10px;
+    float: right;
+}
+#div_id_remember {
+    float: left;
+}
+#id_password_wrapper {
+    margin-bottom: unset;
+}
+#login_openid {
+    clear: both;
+}
+#register-link {
+    color: white;
+    background: #8ad0a1;
+    width: 100%;
+}
+#login-end {
+    clear: both;
+}
 
 .mod-home.is-not-singleuser,
 .mod-login {
@@ -3145,11 +3207,14 @@ section .profile-match-wrapper {
     margin-top: 2.5%;
 }
 
+.mod-home.is-not-singleuser .login-form > #login-extra-links {
+    margin-top: 4em;
+}
+
 .mod-home.is-not-singleuser .login-form > #login-form label,
 .mod-login #content #login-form label {
     color: #eee;
 }
-
 
 .mod-home.is-not-singleuser .login-panel-content,
 .mod-login .login-panel-content {
@@ -3164,11 +3229,15 @@ section .profile-match-wrapper {
     }
 
     .mod-home.is-not-singleuser .login-form > #login-form,
+    .mod-home.is-not-singleuser .login-form > #login-extra-links,
     .mod-login #content #login-form {
         background-color: #fff;
         padding: 1em;
         position: relative;
-        margin-top: 4em;
+    }
+    .mod-home.is-not-singleuser .login-form > #login-extra-links {
+        margin-top: unset;
+        background-color: white;
     }
 
     .mod-home.is-not-singleuser .login-form > #login-form label,
@@ -3176,7 +3245,7 @@ section .profile-match-wrapper {
         color: #444;
     }
 
-    .mod-home.is-not-singleuser .login-form > #login-form::before,
+    .mod-home.is-not-singleuser .login-form::before,
     .mod-login #content #login-form::before {
         display: block;
         position: absolute;
@@ -3189,7 +3258,7 @@ section .profile-match-wrapper {
         z-index: -1;
     }
 
-    .mod-home.is-not-singleuser .login-form > #login-form::after,
+    .mod-home.is-not-singleuser .login-form::after,
     .mod-login #content #login-form::after {
         display: block;
         position: absolute;

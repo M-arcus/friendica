@@ -75,6 +75,7 @@ function profile_init(App $a)
 	}
 
 	$a->page['htmlhead'] .= '<meta name="dfrn-global-visibility" content="' . ($a->profile['net-publish'] ? 'true' : 'false') . '" />' . "\r\n";
+	$a->page['htmlhead'] .= '<link rel="alternate" type="application/atom+xml" href="' . System::baseUrl() . '/dfrn_poll/' . $which . '" title="' . L10n::t('%s\'s timeline', $a->profile['username']) . '"/>' . "\r\n";
 	$a->page['htmlhead'] .= '<link rel="alternate" type="application/atom+xml" href="' . System::baseUrl() . '/feed/' . $which . '/" title="' . L10n::t('%s\'s posts', $a->profile['username']) . '"/>' . "\r\n";
 	$a->page['htmlhead'] .= '<link rel="alternate" type="application/atom+xml" href="' . System::baseUrl() . '/feed/' . $which . '/comments" title="' . L10n::t('%s\'s comments', $a->profile['username']) . '"/>' . "\r\n";
 	$a->page['htmlhead'] .= '<link rel="alternate" type="application/atom+xml" href="' . System::baseUrl() . '/feed/' . $which . '/activity" title="' . L10n::t('%s\'s timeline', $a->profile['username']) . '"/>' . "\r\n";
@@ -191,7 +192,7 @@ function profile_content(App $a, $update = 0)
 		$o .= Widget::commonFriendsVisitor($a->profile['profile_uid']);
 
 		if (x($_SESSION, 'new_member') && $is_owner) {
-			$o .= '<a href="newmember" id="newmember-tips" style="font-size: 1.2em;"><b>' . L10n::t('Tips for New Members') . '</b></a>' . EOL;
+			$o .= '<div id="newmember-tips"><a href="newmember"><b>' . L10n::t('Tips for New Members') . '</b></a></div>';
 		}
 
 		$commpage = $a->profile['page-flags'] == PAGE_COMMUNITY;
@@ -242,17 +243,14 @@ function profile_content(App $a, $update = 0)
 
 		$r = q("SELECT distinct(parent) AS `item_id`, `item`.`network` AS `item_network`, `item`.`created`
 			FROM `item` INNER JOIN `contact` ON `contact`.`id` = `item`.`contact-id`
-			AND `contact`.`blocked` = 0 AND `contact`.`pending` = 0
-			WHERE `item`.`uid` = %d AND `item`.`visible` = 1 AND
-			(`item`.`deleted` = 0 OR item.verb = '" . ACTIVITY_LIKE . "'
-			OR item.verb = '" . ACTIVITY_DISLIKE . "' OR item.verb = '" . ACTIVITY_ATTEND . "'
-			OR item.verb = '" . ACTIVITY_ATTENDNO . "' OR item.verb = '" . ACTIVITY_ATTENDMAYBE . "')
-			AND `item`.`moderated` = 0
-			AND `item`.`wall` = 1
+			AND NOT `contact`.`blocked` AND NOT `contact`.`pending`
+			WHERE `item`.`uid` = %d AND `item`.`visible` AND
+			(NOT `item`.`deleted` OR `item`.`gravity` = %d)
+			AND NOT `item`.`moderated` AND `item`.`wall`
 			$sql_extra4
 			$sql_extra
 			ORDER BY `item`.`created` DESC",
-			intval($a->profile['profile_uid'])
+			intval($a->profile['profile_uid']), intval(GRAVITY_ACTIVITY)
 		);
 
 		if (!DBM::is_result($r)) {
@@ -336,16 +334,9 @@ function profile_content(App $a, $update = 0)
 			$parents_arr[] = $rr['item_id'];
 		}
 
-		$parents_str = implode(', ', $parents_arr);
-
-		$items = q(item_query() . " AND `item`.`uid` = %d
-			AND `item`.`parent` IN (%s)
-			$sql_extra ",
-			intval($a->profile['profile_uid']),
-			dbesc($parents_str)
-		);
-
-		$items = conv_sort($items, 'created');
+		$condition = ['uid' => $a->profile['profile_uid'], 'parent' => $parents_arr];
+		$result = Item::selectForUser($a->profile['profile_uid'], [], $condition);
+		$items = conv_sort(Item::inArray($result), 'created');
 	} else {
 		$items = [];
 	}
@@ -364,7 +355,7 @@ function profile_content(App $a, $update = 0)
 		}
 	}
 
-	$o .= conversation($a, $items, 'profile', $update);
+	$o .= conversation($a, $items, 'profile', $update, false, 'commented', local_user());
 
 	if (!$update) {
 		$o .= alt_pager($a, count($items));

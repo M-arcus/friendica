@@ -2,6 +2,7 @@ Friendica Installation
 ===============
 
 We've tried very hard to ensure that Friendica will run on commodity hosting platforms - such as those used to host Wordpress blogs and Drupal websites.
+We offer a manual and an automatic installation.
 But be aware that Friendica is more than a simple web application.
 It is a complex communications system which more closely resembles an email server than a web server.
 For reliability and performance, messages are delivered in the background and are queued for later delivery when sites are down.
@@ -27,10 +28,10 @@ Requirements
 
 * Apache with mod-rewrite enabled and "Options All" so you can use a local .htaccess file
 * PHP 5.6+ (PHP 7 is recommended for performance)
-* PHP *command line* access with register_argc_argv set to true in the php.ini file
-* Curl, GD, PDO, MySQLi, hash, xml, zip and OpenSSL extensions
-* The POSIX module of PHP needs to be activated (e.g. [RHEL, CentOS](http://www.bigsoft.co.uk/blog/index.php/2014/12/08/posix-php-commands-not-working-under-centos-7) have disabled it)
-* some form of email server or email gateway such that PHP mail() works
+  * PHP *command line* access with register_argc_argv set to true in the php.ini file
+  * Curl, GD, PDO, MySQLi, hash, xml, zip and OpenSSL extensions
+  * The POSIX module of PHP needs to be activated (e.g. [RHEL, CentOS](http://www.bigsoft.co.uk/blog/index.php/2014/12/08/posix-php-commands-not-working-under-centos-7) have disabled it)
+  * some form of email server or email gateway such that PHP mail() works
 * Mysql 5.5.3+ or an equivalant alternative for MySQL (MariaDB, Percona Server etc.)
 * the ability to schedule jobs with cron (Linux/Mac) or Scheduled Tasks (Windows) (Note: other options are presented in Section 7 of this document.)
 * Installation into a top-level domain or sub-domain (without a directory/path component in the URL) is preferred. Directory paths will not be as convenient to use and have not been thoroughly tested.
@@ -46,14 +47,15 @@ If you are able to do so, we recommend using git to clone the source repository 
 This makes the software much easier to update.
 The Linux commands to clone the repository into a directory "mywebsite" would be
 
-    git clone https://github.com/friendica/friendica.git mywebsite
+    git clone https://github.com/friendica/friendica.git -b master mywebsite
     cd mywebsite
     bin/composer.phar install
 
-Make sure the folder *view/smarty3* exists and is writable by the webserver user
+Make sure the folder *view/smarty3* exists and is writable by the webserver user, in this case `www-data`
 
     mkdir view/smarty3
-    chmod 777 view/smarty3
+    chown www-data:www-data view/smarty3
+    chmod 775 view/smarty3
 
 Get the addons by going into your website folder.
 
@@ -61,9 +63,19 @@ Get the addons by going into your website folder.
 
 Clone the addon repository (separately):
 
-    git clone https://github.com/friendica/friendica-addons.git addon
+    git clone https://github.com/friendica/friendica-addons.git -b master addon
 
 If you copy the directory tree to your webserver, make sure that you also copy .htaccess - as "dot" files are often hidden and aren't normally copied.
+
+If you want to use the development version of Friendica you can switch to the devel branch in the repository by running
+
+    git checkout develop
+    bin/composer.phar install
+    cd addon
+    git checkout develop
+
+please be aware that the develop branch may break your Friendica node at any time.
+If you encounter a bug, please let us know.
 
 ### Create a database
 
@@ -79,23 +91,48 @@ In this case find the [mysqld] section in your my.cnf file and add the line :
 
 Restart mysql and you should be fine.
 
-
-### Run the installer
+### Option A: Run the manual installer
 
 Point your web browser to the new site and follow the instructions.
 Please note any error messages and correct these before continuing.
 
 If you need to specify a port for the connection to the database, you can do so in the host name setting for the database.
 
-*If* the automated installation fails for any reason, check the following:
+*If* the manual installation fails for any reason, check the following:
 
 * Does ".htconfig.php" exist? If not, edit htconfig.php and change the system settings. Rename to .htconfig.php
-* Is the database is populated? If not, import the contents of "database.sql" with phpmyadmin or mysql command line.
+* Is the database is populated? If not, import the contents of "database.sql" with phpmyadmin or the mysql command line.
 
 At this point visit your website again, and register your personal account.
 Registration errors should all be recoverable automatically.
 If you get any *critical* failure at this point, it generally indicates the database was not installed correctly.
 You might wish to move/rename .htconfig.php to another name and empty (called 'dropping') the database tables, so that you can start fresh.
+
+### Option B: Run the automatic install script
+
+Open the file htconfig.php in the main Friendica directory with a text editor.
+Remove the `die('...');` line and edit the lines to suit your installation (MySQL, language, theme etc.).
+Then save the file (do not rename it). 
+
+Navigate to the main Friendica directory and execute the following command:
+
+    bin/console autoinstall
+
+Or if you wish to include all optional checks, execute this statement instead:
+
+    bin/console autoinstall -a
+
+At this point visit your website again, and register your personal account.
+
+*If* the automatic installation fails for any reason, check the following:
+
+* Does ".htconfig.php" already exist? If yes, the automatic installation won't start
+* Are the settings inside "htconfig.php" correct? If not, edit the file again.
+* Is the empty MySQL-database created? If not, create it.
+
+For more information during the installation, you can use this command line option
+
+    bin/console autoinstall -v
 
 ### Set up the worker
 

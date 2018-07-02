@@ -15,6 +15,7 @@ use Friendica\Model\Contact;
 use Friendica\Model\Conversation;
 use Friendica\Model\GContact;
 use Friendica\Model\Item;
+use Friendica\Model\User;
 use Friendica\Network\Probe;
 use Friendica\Object\Image;
 use Friendica\Util\DateTimeFormat;
@@ -415,7 +416,7 @@ class OStatus
 			}
 
 			// Deletions come with the same uri, so we check for duplicates after processing deletions
-			if (dba::exists('item', ['uid' => $importer["uid"], 'uri' => $item["uri"]])) {
+			if (Item::exists(['uid' => $importer["uid"], 'uri' => $item["uri"]])) {
 				logger('Post with URI '.$item["uri"].' already existed for user '.$importer["uid"].'.', LOGGER_DEBUG);
 				continue;
 			} else {
@@ -450,7 +451,7 @@ class OStatus
 
 				$item["verb"] = ACTIVITY_LIKE;
 				$item["parent-uri"] = $orig_uri;
-				$item["gravity"] = GRAVITY_LIKE;
+				$item["gravity"] = GRAVITY_ACTIVITY;
 			}
 
 			// http://activitystrea.ms/schema/1.0/rsvp-yes
@@ -488,7 +489,7 @@ class OStatus
 					}
 				} else {
 					// But we will only import complete threads
-					$valid = dba::exists('item', ['uid' => $importer["uid"], 'uri' => self::$itemlist[0]['parent-uri']]);
+					$valid = Item::exists(['uid' => $importer["uid"], 'uri' => self::$itemlist[0]['parent-uri']]);
 					if ($valid) {
 						logger("Item with uri ".self::$itemlist[0]["uri"]." belongs to parent ".self::$itemlist[0]['parent-uri']." of user ".$importer["uid"].". It will be imported.", LOGGER_DEBUG);
 					}
@@ -505,7 +506,7 @@ class OStatus
 						}
 					}
 					foreach (self::$itemlist as $item) {
-						$found = dba::exists('item', ['uid' => $importer["uid"], 'uri' => $item["uri"]]);
+						$found = Item::exists(['uid' => $importer["uid"], 'uri' => $item["uri"]]);
 						if ($found) {
 							logger("Item with uri ".$item["uri"]." for user ".$importer["uid"]." already exists.", LOGGER_DEBUG);
 						} elseif ($item['contact-id'] < 0) {
@@ -536,14 +537,13 @@ class OStatus
 	 */
 	private static function deleteNotice($item)
 	{
-		$condition = ['uid' => $item['uid'], 'author-link' => $item['author-link'], 'uri' => $item['uri']];
-		$deleted = dba::selectFirst('item', ['id', 'parent-uri'], $condition);
-		if (!DBM::is_result($deleted)) {
-			logger('Item from '.$item['author-link'].' with uri '.$item['uri'].' for user '.$item['uid']." wasn't found. We don't delete it. ");
+		$condition = ['uid' => $item['uid'], 'author-id' => $item['author-id'], 'uri' => $item['uri']];
+		if (!Item::exists($condition)) {
+			logger('Item from '.$item['author-link'].' with uri '.$item['uri'].' for user '.$item['uid']." wasn't found. We don't delete it.");
 			return;
 		}
 
-		Item::deleteById($deleted["id"]);
+		Item::delete($condition);
 
 		logger('Deleted item with uri '.$item['uri'].' for user '.$item['uid']);
 	}
@@ -674,7 +674,7 @@ class OStatus
 		}
 
 		if (isset($item["parent-uri"])) {
-			if (!dba::exists('item', ['uid' => $importer["uid"], 'uri' => $item['parent-uri']])) {
+			if (!Item::exists(['uid' => $importer["uid"], 'uri' => $item['parent-uri']])) {
 				if ($related != '') {
 					self::fetchRelated($related, $item["parent-uri"], $importer);
 				}
@@ -1620,22 +1620,14 @@ class OStatus
 
 		$title = self::entryHeader($doc, $entry, $owner, $item, $toplevel);
 
-		$r = q(
-			"SELECT * FROM `item` WHERE `uid` = %d AND `guid` = '%s' AND NOT `private` AND `network` IN ('%s', '%s', '%s') LIMIT 1",
-			intval($owner["uid"]),
-			dbesc($repeated_guid),
-			dbesc(NETWORK_DFRN),
-			dbesc(NETWORK_DIASPORA),
-			dbesc(NETWORK_OSTATUS)
-		);
-		if (DBM::is_result($r)) {
-			$repeated_item = $r[0];
-		} else {
+		$condition = ['uid' => $owner["uid"], 'guid' => $repeated_guid, 'private' => false,
+			'network' => [NETWORK_DFRN, NETWORK_DIASPORA, NETWORK_OSTATUS]];
+		$repeated_item = Item::selectFirst([], $condition);
+		if (!DBM::is_result($repeated_item)) {
 			return false;
 		}
-		$contact = self::contactEntry($repeated_item['author-link'], $owner);
 
-		$parent_item = (($item['thr-parent']) ? $item['thr-parent'] : $item['parent-uri']);
+		$contact = self::contactEntry($repeated_item['author-link'], $owner);
 
 		$title = $owner["nick"]." repeated a notice by ".$contact["nick"];
 
@@ -1696,16 +1688,11 @@ class OStatus
 
 		$as_object = $doc->createElement("activity:object");
 
-		$parent = q(
-			"SELECT * FROM `item` WHERE `uri` = '%s' AND `uid` = %d",
-			dbesc($item["thr-parent"]),
-			intval($item["uid"])
-		);
-		$parent_item = (($item['thr-parent']) ? $item['thr-parent'] : $item['parent-uri']);
+		$parent = Item::selectFirst([], ['uri' => $item["thr-parent"], 'uid' => $item["uid"]]);
 
-		XML::addElement($doc, $as_object, "activity:object-type", self::constructObjecttype($parent[0]));
+		XML::addElement($doc, $as_object, "activity:object-type", self::constructObjecttype($parent));
 
-		self::entryContent($doc, $as_object, $parent[0], $owner, "New entry");
+		self::entryContent($doc, $as_object, $parent, $owner, "New entry");
 
 		$entry->appendChild($as_object);
 
@@ -1948,27 +1935,24 @@ class OStatus
 	 * @param bool   $complete default true
 	 * @return void
 	 */
-	private static function entryFooter($doc, $entry, $item, $owner, $complete = true)
+	private static function entryFooter($doc, $entry, array $item, array $owner, $complete = true)
 	{
 		$mentioned = [];
 
 		if (($item['parent'] != $item['id']) || ($item['parent-uri'] !== $item['uri']) || (($item['thr-parent'] !== '') && ($item['thr-parent'] !== $item['uri']))) {
-			$parent = q("SELECT `guid`, `author-link`, `owner-link` FROM `item` WHERE `id` = %d", intval($item["parent"]));
+			$parent = Item::selectFirst(['guid', 'author-link', 'owner-link'], ['id' => $item["parent"]]);
 			$parent_item = (($item['thr-parent']) ? $item['thr-parent'] : $item['parent-uri']);
 
-			$thrparent = q(
-				"SELECT `guid`, `author-link`, `owner-link`, `plink` FROM `item` WHERE `uid` = %d AND `uri` = '%s'",
-				intval($owner["uid"]),
-				dbesc($parent_item)
-			);
-			if ($thrparent) {
-				$mentioned[$thrparent[0]["author-link"]] = $thrparent[0]["author-link"];
-				$mentioned[$thrparent[0]["owner-link"]] = $thrparent[0]["owner-link"];
-				$parent_plink = $thrparent[0]["plink"];
+			$thrparent = Item::selectFirst(['guid', 'author-link', 'owner-link', 'plink'], ['uid' => $owner["uid"], 'uri' => $parent_item]);
+
+			if (DBM::is_result($thrparent)) {
+				$mentioned[$thrparent["author-link"]] = $thrparent["author-link"];
+				$mentioned[$thrparent["owner-link"]] = $thrparent["owner-link"];
+				$parent_plink = $thrparent["plink"];
 			} else {
-				$mentioned[$parent[0]["author-link"]] = $parent[0]["author-link"];
-				$mentioned[$parent[0]["owner-link"]] = $parent[0]["owner-link"];
-				$parent_plink = System::baseUrl()."/display/".$parent[0]["guid"];
+				$mentioned[$parent["author-link"]] = $parent["author-link"];
+				$mentioned[$parent["owner-link"]] = $parent["owner-link"];
+				$parent_plink = System::baseUrl()."/display/".$parent["guid"];
 			}
 
 			$attributes = [
@@ -1987,13 +1971,13 @@ class OStatus
 			$conversation_uri = $conversation_href;
 
 			if (isset($parent_item)) {
-				$r = dba::fetch_first("SELECT `conversation-uri`, `conversation-href` FROM `conversation` WHERE `item-uri` = ?", $parent_item);
-				if (DBM::is_result($r)) {
+				$conversation = dba::selectFirst('conversation', ['conversation-uri', 'conversation-href'], ['item-uri' => $parent_item]);
+				if (DBM::is_result($conversation)) {
 					if ($r['conversation-uri'] != '') {
-						$conversation_uri = $r['conversation-uri'];
+						$conversation_uri = $conversation['conversation-uri'];
 					}
 					if ($r['conversation-href'] != '') {
-						$conversation_href = $r['conversation-href'];
+						$conversation_href = $conversation['conversation-href'];
 					}
 				}
 			}
@@ -2048,9 +2032,11 @@ class OStatus
 		}
 
 		if ($owner['account-type'] == ACCOUNT_TYPE_COMMUNITY) {
-			XML::addElement($doc, $entry, "link", "", ["rel" => "mentioned",
-									"ostatus:object-type" => "http://activitystrea.ms/schema/1.0/group",
-									"href" => $owner['url']]);
+			XML::addElement($doc, $entry, "link", "", [
+				"rel" => "mentioned",
+				"ostatus:object-type" => "http://activitystrea.ms/schema/1.0/group",
+				"href" => $owner['url']
+			]);
 		}
 
 		if (!$item["private"]) {
@@ -2117,25 +2103,23 @@ class OStatus
 	{
 		$stamp = microtime(true);
 
+		$owner = User::getOwnerDataByNick($owner_nick);
+		if (!$owner) {
+			return;
+		}
+
 		$cachekey = "ostatus:feed:" . $owner_nick . ":" . $filter . ":" . $last_update;
 
 		$previous_created = $last_update;
 
-		$result = Cache::get($cachekey);
-		if (!$nocache && !is_null($result)) {
-			logger('Feed duration: ' . number_format(microtime(true) - $stamp, 3) . ' - ' . $owner_nick . ' - ' . $filter . ' - ' . $previous_created . ' (cached)', LOGGER_DEBUG);
-			$last_update = $result['last_update'];
-			return $result['feed'];
-		}
-
-		$owner = dba::fetch_first(
-			"SELECT `contact`.*, `user`.`nickname`, `user`.`timezone`, `user`.`page-flags`, `user`.`account-type`
-				FROM `contact` INNER JOIN `user` ON `user`.`uid` = `contact`.`uid`
-				WHERE `contact`.`self` AND `user`.`nickname` = ? LIMIT 1",
-			$owner_nick
-		);
-		if (!DBM::is_result($owner)) {
-			return;
+		// Don't cache when the last item was posted less then 15 minutes ago (Cache duration)
+		if ((time() - strtotime($owner['last-item'])) < 15*60) {
+			$result = Cache::get($cachekey);
+			if (!$nocache && !is_null($result)) {
+				logger('Feed duration: ' . number_format(microtime(true) - $stamp, 3) . ' - ' . $owner_nick . ' - ' . $filter . ' - ' . $previous_created . ' (cached)', LOGGER_DEBUG);
+				$last_update = $result['last_update'];
+				return $result['feed'];
+			}
 		}
 
 		if (!strlen($last_update)) {
@@ -2145,37 +2129,30 @@ class OStatus
 		$check_date = DateTimeFormat::utc($last_update);
 		$authorid = Contact::getIdForURL($owner["url"], 0, true);
 
-		$sql_extra = '';
-		if ($filter === 'posts') {
-			$sql_extra .= ' AND `item`.`id` = `item`.`parent` ';
-		}
+		$condition = ["`uid` = ? AND `created` > ? AND NOT `deleted`
+			AND NOT `private` AND `visible` AND `wall` AND `parent-network` IN (?, ?)",
+			$owner["uid"], $check_date, NETWORK_OSTATUS, NETWORK_DFRN];
 
 		if ($filter === 'comments') {
-			$sql_extra .= sprintf(" AND `item`.`object-type` = '%s' ", dbesc(ACTIVITY_OBJ_COMMENT));
+			$condition[0] .= " AND `object-type` = ? ";
+			$condition[] = ACTIVITY_OBJ_COMMENT;
 		}
 
 		if ($owner['account-type'] != ACCOUNT_TYPE_COMMUNITY) {
-			$sql_extra .= sprintf(" AND `item`.`contact-id` = %d AND `item`.`author-id` = %d ", intval($owner["id"]), intval($authorid));
+			$condition[0] .= " AND `contact-id` = ? AND `author-id` = ?";
+			$condition[] = $owner["id"];
+			$condition[] = $authorid;
 		}
 
-		$items = q(
-			"SELECT `item`.*, `item`.`id` AS `item_id` FROM `item` USE INDEX (`uid_contactid_created`)
-				STRAIGHT_JOIN `thread` ON `thread`.`iid` = `item`.`parent`
-				WHERE `item`.`uid` = %d
-				AND `item`.`created` > '%s'
-				AND NOT `item`.`deleted`
-				AND NOT `item`.`private`
-				AND `item`.`visible`
-				AND `item`.`wall`
-				AND `thread`.`network` IN ('%s', '%s')
-				$sql_extra
-				ORDER BY `item`.`created` DESC LIMIT %d",
-			intval($owner["uid"]),
-			dbesc($check_date),
-			dbesc(NETWORK_OSTATUS),
-			dbesc(NETWORK_DFRN),
-			intval($max_items)
-		);
+		$params = ['order' => ['created' => true], 'limit' => $max_items];
+
+		if ($filter === 'posts') {
+			$ret = Item::selectThread([], $condition, $params);
+		} else {
+			$ret = Item::select([], $condition, $params);
+		}
+
+		$items = Item::inArray($ret);
 
 		$doc = new DOMDocument('1.0', 'utf-8');
 		$doc->formatOutput = true;

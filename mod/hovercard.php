@@ -44,7 +44,7 @@ function hovercard_content()
 	// the contact. So we strip out the contact id from the internal url and look in the contact table for
 	// the real url (nurl)
 	$cid = 0;
-	if (local_user() && strpos($profileurl, 'redir/') === 0) {
+	if (strpos($profileurl, 'redir/') === 0) {
 		$cid = intval(substr($profileurl, 6));
 		$remote_contact = dba::selectFirst('contact', ['nurl'], ['id' => $cid]);
 		$profileurl = defaults($remote_contact, 'nurl', '');
@@ -72,7 +72,7 @@ function hovercard_content()
 		'nick'     => $contact['nick'],
 		'addr'     => defaults($contact, 'addr', $contact['url']),
 		'thumb'    => proxy_url($contact['thumb'], false, PROXY_SIZE_THUMB),
-		'url'      => $cid ? ('redir/' . $cid) : Profile::zrl($contact['url']),
+		'url'      => Contact::magicLink($contact['url']),
 		'nurl'     => $contact['nurl'], // We additionally store the nurl as identifier
 		'location' => $contact['location'],
 		'gender'   => $contact['gender'],

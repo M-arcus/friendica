@@ -11,6 +11,7 @@ use Friendica\Core\System;
 use Friendica\Database\DBM;
 use Friendica\Util\DateTimeFormat;
 use Friendica\Util\Emailer;
+use Friendica\Model\Item;
 
 /**
  * @brief Creates a notification entry and possibly sends a mail
@@ -129,7 +130,7 @@ function notification($params)
 		$item = null;
 
 		if ($params['otype'] === 'item' && $parent_id) {
-			$item = dba::selectFirst('item', [], ['id' => $parent_id]);
+			$item = Item::selectFirstForUser($params['uid'], [], ['id' => $parent_id]);
 		}
 
 		$item_post_type = item_post_type($item);
@@ -152,7 +153,7 @@ function notification($params)
 		}
 
 		// "your post"
-		if (DBM::is_result($item) && $item['owner-name'] == $item['author-name'] && $item['wall']) {
+		if (DBM::is_result($item) && $item['owner-id'] == $item['author-id'] && $item['wall']) {
 			$dest_str = L10n::t('%1$s commented on [url=%2$s]your %3$s[/url]',
 				'[url='.$params['source_link'].']'.$params['source_name'].'[/url]',
 				$itemlink,
@@ -357,7 +358,7 @@ function notification($params)
 	if ($params['type'] == NOTIFY_SYSTEM) {
 		switch($params['event']) {
 			case "SYSTEM_REGISTER_REQUEST":
-				$subject = L10n::t('[Friendica System:Notify] registration request');
+				$subject = L10n::t('[Friendica System Notify]') . ' ' . L10n::t('registration request');
 
 				$preamble = L10n::t('You\'ve received a registration request from \'%1$s\' at %2$s', $params['source_name'], $sitename);
 				$epreamble = L10n::t('You\'ve received a [url=%1$s]registration request[/url] from %2$s.',
@@ -365,7 +366,7 @@ function notification($params)
 					'[url='.$params['source_link'].']'.$params['source_name'].'[/url]'
 				);
 
-				$body = L10n::t('Full Name:	%1$s\nSite Location:	%2$s\nLogin Name:	%3$s ' . "\x28" . '%4$s' . "\x29",
+				$body = L10n::t("Full Name:	%s\nSite Location:	%s\nLogin Name:	%s (%s)",
 					$params['source_name'],
 					$siteurl, $params['source_mail'],
 					$params['source_nick']
@@ -561,11 +562,8 @@ function notification($params)
 			}
 		}
 
-		// textversion keeps linebreaks
-		$textversion = strip_tags(str_replace("<br>", "\n", html_entity_decode(BBCode::convert(stripslashes(str_replace(["\\r\\n", "\\r", "\\n"], "\n",
-			$body))),ENT_QUOTES, 'UTF-8')));
-		$htmlversion = html_entity_decode(BBCode::convert(stripslashes(str_replace(["\\r\\n", "\\r", "\\n\\n", "\\n"],
-			"<br />\n", $body))), ENT_QUOTES, 'UTF-8');
+		$textversion = BBCode::toPlaintext($body);
+		$htmlversion = BBCode::convert($body);
 
 		$datarray = [];
 		$datarray['banner'] = $banner;
@@ -726,26 +724,28 @@ function check_item_notification($itemid, $uid, $defaulttype = "") {
 
 	$profiles = $profiles2;
 
-	$profile_list = "";
+	$ret = dba::select('contact', ['id'], ['uid' => 0, 'nurl' => $profiles]);
 
-	foreach ($profiles AS $profile) {
-		if ($profile_list != "")
-			$profile_list .= "', '";
+	$contacts = [];
 
-		$profile_list .= dbesc($profile);
+	while ($contact = dba::fetch($ret)) {
+		$contacts[] = $contact['id'];
 	}
 
-	$profile_list = "'".$profile_list."'";
+	$contact_list = implode(',', $contacts);
+
+	dba::close($ret);
 
 	// Only act if it is a "real" post
 	// We need the additional check for the "local_profile" because of mixed situations on connector networks
-	$item = q("SELECT `id`, `mention`, `tag`,`parent`, `title`, `body`, `author-name`, `author-link`, `author-avatar`, `guid`,
-			`parent-uri`, `uri`, `contact-id`
-			FROM `item` WHERE `id` = %d AND `verb` IN ('%s', '') AND `type` != 'activity' AND
-				NOT (`author-link` IN ($profile_list))  LIMIT 1",
-		intval($itemid), dbesc(ACTIVITY_POST));
-	if (!$item)
-		return false;
+	$fields = ['id', 'mention', 'tag', 'parent', 'title', 'body',
+		'author-link', 'author-name', 'author-avatar', 'author-id',
+		'guid', 'parent-uri', 'uri', 'contact-id', 'network'];
+	$condition = ['id' => $itemid, 'gravity' => [GRAVITY_PARENT, GRAVITY_COMMENT]];
+	$item = Item::selectFirst($fields, $condition);
+	if (!DBM::is_result($item) || in_array($item['author-id'], $contacts)) {
+		return;
+	}
 
 	// Generate the notification array
 	$params = [];
@@ -754,17 +754,17 @@ function check_item_notification($itemid, $uid, $defaulttype = "") {
 	$params["language"] = $user["language"];
 	$params["to_name"] = $user["username"];
 	$params["to_email"] = $user["email"];
-	$params["item"] = $item[0];
-	$params["parent"] = $item[0]["parent"];
-	$params["link"] = System::baseUrl().'/display/'.urlencode($item[0]["guid"]);
+	$params["item"] = $item;
+	$params["parent"] = $item["parent"];
+	$params["link"] = System::baseUrl().'/display/'.urlencode($item["guid"]);
 	$params["otype"] = 'item';
-	$params["source_name"] = $item[0]["author-name"];
-	$params["source_link"] = $item[0]["author-link"];
-	$params["source_photo"] = $item[0]["author-avatar"];
+	$params["source_name"] = $item["author-name"];
+	$params["source_link"] = $item["author-link"];
+	$params["source_photo"] = $item["author-avatar"];
 
-	if ($item[0]["parent-uri"] === $item[0]["uri"]) {
+	if ($item["parent-uri"] === $item["uri"]) {
 		// Send a notification for every new post?
-		$send_notification = dba::exists('contact', ['id' => $item[0]['contact-id'], 'notify_new_posts' => true]);
+		$send_notification = dba::exists('contact', ['id' => $item['contact-id'], 'notify_new_posts' => true]);
 
 		if (!$send_notification) {
 			$tags = q("SELECT `url` FROM `term` WHERE `otype` = %d AND `oid` = %d AND `type` = %d AND `uid` = %d",
@@ -791,11 +791,11 @@ function check_item_notification($itemid, $uid, $defaulttype = "") {
 	$tagged = false;
 
 	foreach ($profiles AS $profile) {
-		if (strpos($item[0]["tag"], "=".$profile."]") || strpos($item[0]["body"], "=".$profile."]"))
+		if (strpos($item["tag"], "=".$profile."]") || strpos($item["body"], "=".$profile."]"))
 			$tagged = true;
 	}
 
-	if ($item[0]["mention"] || $tagged || ($defaulttype == NOTIFY_TAGSELF)) {
+	if ($item["mention"] || $tagged || ($defaulttype == NOTIFY_TAGSELF)) {
 		$params["type"] = NOTIFY_TAGSELF;
 		$params["verb"] = ACTIVITY_TAG;
 	}
@@ -803,9 +803,9 @@ function check_item_notification($itemid, $uid, $defaulttype = "") {
 	// Is it a post that the user had started or where he interacted?
 	$parent = q("SELECT `thread`.`iid` FROM `thread` INNER JOIN `item` ON `item`.`parent` = `thread`.`iid`
 			WHERE `thread`.`iid` = %d AND NOT `thread`.`ignored` AND
-				(`thread`.`mention` OR `item`.`author-link` IN ($profile_list))
+				(`thread`.`mention` OR `item`.`author-id` IN ($contact_list))
 			LIMIT 1",
-			intval($item[0]["parent"]));
+			intval($item["parent"]));
 
 	if ($parent && !isset($params["type"])) {
 		$params["type"] = NOTIFY_COMMENT;

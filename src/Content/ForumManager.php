@@ -9,6 +9,7 @@ use Friendica\App;
 use Friendica\Content\Feature;
 use Friendica\Core\L10n;
 use Friendica\Core\System;
+use Friendica\Model\Contact;
 use Friendica\Database\DBM;
 use dba;
 
@@ -49,7 +50,7 @@ class ForumManager
 			"SELECT `contact`.`id`, `contact`.`url`, `contact`.`name`, `contact`.`micro`, `contact`.`thumb`
 			FROM `contact`
 				WHERE `network`= 'dfrn' AND $select AND `uid` = ?
-				AND NOT `blocked` AND NOT `hidden` AND NOT `pending` AND NOT `archive`
+				AND NOT `blocked` AND NOT `pending` AND NOT `archive`
 				AND `success_update` > `failure_update`
 			$order ",
 			$uid
@@ -107,7 +108,7 @@ class ForumManager
 
 				$entry = [
 					'url' => 'network?f=&cid=' . $contact['id'],
-					'external_url' => 'redir/' . $contact['id'],
+					'external_url' => Contact::magicLink($contact['url']),
 					'name' => $contact['name'],
 					'cid' => $contact['id'],
 					'selected' 	=> $selected,

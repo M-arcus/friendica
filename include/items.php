@@ -29,7 +29,7 @@ function add_page_info_data($data, $no_photos = false) {
 	// It maybe is a rich content, but if it does have everything that a link has,
 	// then treat it that way
 	if (($data["type"] == "rich") && is_string($data["title"]) &&
-		is_string($data["text"]) && (sizeof($data["images"]) > 0)) {
+		is_string($data["text"]) && !empty($data["images"])) {
 		$data["type"] = "link";
 	}
 
@@ -63,7 +63,7 @@ function add_page_info_data($data, $no_photos = false) {
 		$text .= " title='".$data["title"]."'";
 	}
 
-	if (sizeof($data["images"]) > 0) {
+	if (!empty($data["images"])) {
 		$preview = str_replace(["[", "]"], ["&#91;", "&#93;"], htmlentities($data["images"][0]["src"], ENT_QUOTES, 'UTF-8', false));
 		// if the preview picture is larger than 500 pixels then show it in a larger mode
 		// But only, if the picture isn't higher than large (To prevent huge posts)
@@ -274,6 +274,7 @@ function consume_feed($xml, $importer, $contact, &$hub, $datedir = 0, $pass = 0)
 function subscribe_to_hub($url, $importer, $contact, $hubmode = 'subscribe') {
 
 	$a = get_app();
+	$r = null;
 
 	if (is_array($importer)) {
 		$r = q("SELECT `nickname` FROM `user` WHERE `uid` = %d LIMIT 1",
@@ -321,7 +322,7 @@ function drop_items($items) {
 
 	if (count($items)) {
 		foreach ($items as $item) {
-			$owner = Item::deleteById($item);
+			$owner = Item::deleteForUser(['id' => $item], local_user());
 			if ($owner && !$uid)
 				$uid = $owner;
 		}
@@ -334,16 +335,13 @@ function drop_item($id) {
 
 	// locate item to be deleted
 
-	$r = q("SELECT * FROM `item` WHERE `id` = %d LIMIT 1",
-		intval($id)
-	);
+	$fields = ['id', 'uid', 'contact-id', 'deleted'];
+	$item = Item::selectFirstForUser(local_user(), $fields, ['id' => $id]);
 
-	if (!DBM::is_result($r)) {
+	if (!DBM::is_result($item)) {
 		notice(L10n::t('Item not found.') . EOL);
 		goaway(System::baseUrl() . '/' . $_SESSION['return_url']);
 	}
-
-	$item = $r[0];
 
 	if ($item['deleted']) {
 		return 0;
@@ -363,7 +361,6 @@ function drop_item($id) {
 	}
 
 	if ((local_user() == $item['uid']) || $contact_id) {
-
 		// Check if we should do HTML-based delete confirmation
 		if ($_REQUEST['confirm']) {
 			// <form> can't take arguments in its "action" parameter
@@ -393,7 +390,7 @@ function drop_item($id) {
 		}
 
 		// delete the item
-		Item::deleteById($item['id']);
+		Item::deleteForUser(['id' => $item['id']], local_user());
 
 		goaway(System::baseUrl() . '/' . $_SESSION['return_url']);
 		//NOTREACHED

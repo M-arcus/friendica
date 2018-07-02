@@ -343,159 +343,30 @@ class BBCode extends BaseObject
 	}
 
 	/**
-	 * @brief Convert a message into plaintext for connectors to other networks
+	 * @brief Converts a BBCode text into plaintext
 	 *
-	 * @param array $b The message array that is about to be posted
-	 * @param int $limit The maximum number of characters when posting to that network
-	 * @param bool $includedlinks Has an attached link to be included into the message?
-	 * @param int $htmlmode This triggers the behaviour of the bbcode conversion
-	 * @param string $target_network Name of the network where the post should go to.
+	 * @param bool $keep_urls Whether to keep URLs in the resulting plaintext
 	 *
-	 * @return string The converted message
+	 * @return string
 	 */
-	public static function toPlaintext($b, $limit = 0, $includedlinks = false, $htmlmode = 2, $target_network = "")
+	public static function toPlaintext($text, $keep_urls = true)
 	{
-		// Remove the hash tags
-		$URLSearchString = "^\[\]";
-		$body = preg_replace("/([#@])\[url\=([$URLSearchString]*)\](.*?)\[\/url\]/ism", '$1$3', $b["body"]);
-
-		// Add an URL element if the text contains a raw link
-		$body = preg_replace("/([^\]\='".'"'."]|^)(https?\:\/\/[a-zA-Z0-9\:\/\-\?\&\;\.\=\_\~\#\%\$\!\+\,]+)/ism", '$1[url]$2[/url]', $body);
-
-		// Remove the abstract
-		$body = self::stripAbstract($body);
-
-		// At first look at data that is attached via "type-..." stuff
-		// This will hopefully replaced with a dedicated bbcode later
-		//$post = self::getAttachedData($b["body"]);
-		$post = self::getAttachedData($body, $b);
-
-		if (($b["title"] != "") && ($post["text"] != "")) {
-			$post["text"] = trim($b["title"]."\n\n".$post["text"]);
-		} elseif ($b["title"] != "") {
-			$post["text"] = trim($b["title"]);
+		$naked_text = preg_replace('/\[(.+?)\]/','', $text);
+		if (!$keep_urls) {
+			$naked_text = preg_replace('#https?\://[^\s<]+[^\s\.\)]#i', '', $naked_text);
 		}
 
-		$abstract = "";
+		return $naked_text;
+	}
 
-		// Fetch the abstract from the given target network
-		if ($target_network != "") {
-			$default_abstract = self::getAbstract($b["body"]);
-			$abstract = self::getAbstract($b["body"], $target_network);
-
-			// If we post to a network with no limit we only fetch
-			// an abstract exactly for this network
-			if (($limit == 0) && ($abstract == $default_abstract)) {
-				$abstract = "";
-			}
-		} else {// Try to guess the correct target network
-			switch ($htmlmode) {
-				case 8:
-					$abstract = self::getAbstract($b["body"], NETWORK_TWITTER);
-					break;
-				case 7:
-					$abstract = self::getAbstract($b["body"], NETWORK_STATUSNET);
-					break;
-				case 6:
-					$abstract = self::getAbstract($b["body"], NETWORK_APPNET);
-					break;
-				default: // We don't know the exact target.
-					// We fetch an abstract since there is a posting limit.
-					if ($limit > 0) {
-						$abstract = self::getAbstract($b["body"]);
-					}
-			}
+	private static function proxyUrl($image, $simplehtml = false)
+	{
+		// Only send proxied pictures to API and for internal display
+		if (in_array($simplehtml, [false, 2])) {
+			return proxy_url($image);
+		} else {
+			return $image;
 		}
-
-		if ($abstract != "") {
-			$post["text"] = $abstract;
-
-			if ($post["type"] == "text") {
-				$post["type"] = "link";
-				$post["url"] = $b["plink"];
-			}
-		}
-
-		$html = self::convert($post["text"].$post["after"], false, $htmlmode);
-		$msg = HTML::toPlaintext($html, 0, true);
-		$msg = trim(html_entity_decode($msg, ENT_QUOTES, 'UTF-8'));
-
-		$link = "";
-		if ($includedlinks) {
-			if ($post["type"] == "link") {
-				$link = $post["url"];
-			} elseif ($post["type"] == "text") {
-				$link = $post["url"];
-			} elseif ($post["type"] == "video") {
-				$link = $post["url"];
-			} elseif ($post["type"] == "photo") {
-				$link = $post["image"];
-			}
-
-			if (($msg == "") && isset($post["title"])) {
-				$msg = trim($post["title"]);
-			}
-
-			if (($msg == "") && isset($post["description"])) {
-				$msg = trim($post["description"]);
-			}
-
-			// If the link is already contained in the post, then it neeedn't to be added again
-			// But: if the link is beyond the limit, then it has to be added.
-			if (($link != "") && strstr($msg, $link)) {
-				$pos = strpos($msg, $link);
-
-				// Will the text be shortened in the link?
-				// Or is the link the last item in the post?
-				if (($limit > 0) && ($pos < $limit) && (($pos + 23 > $limit) || ($pos + strlen($link) == strlen($msg)))) {
-					$msg = trim(str_replace($link, "", $msg));
-				} elseif (($limit == 0) || ($pos < $limit)) {
-					// The limit has to be increased since it will be shortened - but not now
-					// Only do it with Twitter (htmlmode = 8)
-					if (($limit > 0) && (strlen($link) > 23) && ($htmlmode == 8)) {
-						$limit = $limit - 23 + strlen($link);
-					}
-
-					$link = "";
-
-					if ($post["type"] == "text") {
-						unset($post["url"]);
-					}
-				}
-			}
-		}
-
-		if ($limit > 0) {
-			// Reduce multiple spaces
-			// When posted to a network with limited space, we try to gain space where possible
-			while (strpos($msg, "  ") !== false) {
-				$msg = str_replace("  ", " ", $msg);
-			}
-
-			// Twitter is using its own limiter, so we always assume that shortened links will have this length
-			if (iconv_strlen($link, "UTF-8") > 0) {
-				$limit = $limit - 23;
-			}
-
-			if (iconv_strlen($msg, "UTF-8") > $limit) {
-				if (($post["type"] == "text") && isset($post["url"])) {
-					$post["url"] = $b["plink"];
-				} elseif (!isset($post["url"])) {
-					$limit = $limit - 23;
-					$post["url"] = $b["plink"];
-				// Which purpose has this line? It is now uncommented, but left as a reminder
-				//} elseif (strpos($b["body"], "[share") !== false) {
-				//	$post["url"] = $b["plink"];
-				} elseif (PConfig::get($b["uid"], "system", "no_intelligent_shortening")) {
-					$post["url"] = $b["plink"];
-				}
-				$msg = Plaintext::shorten($msg, $limit);
-			}
-		}
-
-		$post["text"] = trim($msg);
-
-		return($post);
 	}
 
 	public static function scaleExternalImages($srctext, $include_link = true, $scale_replace = false)
@@ -701,13 +572,13 @@ class BBCode extends BaseObject
 				}
 
 				if ($data["image"] != "") {
-					$return .= sprintf('<a href="%s" target="_blank"><img src="%s" alt="" title="%s" class="attachment-image" /></a><br />', $data["url"], proxy_url($data["image"]), $data["title"]);
+					$return .= sprintf('<a href="%s" target="_blank"><img src="%s" alt="" title="%s" class="attachment-image" /></a><br />', $data["url"], self::proxyUrl($data["image"], $simplehtml), $data["title"]);
 				} elseif ($data["preview"] != "") {
-					$return .= sprintf('<a href="%s" target="_blank"><img src="%s" alt="" title="%s" class="attachment-preview" /></a><br />', $data["url"], proxy_url($data["preview"]), $data["title"]);
+					$return .= sprintf('<a href="%s" target="_blank"><img src="%s" alt="" title="%s" class="attachment-preview" /></a><br />', $data["url"], self::proxyUrl($data["preview"], $simplehtml), $data["title"]);
 				}
 
 				if (($data["type"] == "photo") && ($data["url"] != "") && ($data["image"] != "")) {
-					$return .= sprintf('<a href="%s" target="_blank"><img src="%s" alt="" title="%s" class="attachment-image" /></a>', $data["url"], proxy_url($data["image"]), $data["title"]);
+					$return .= sprintf('<a href="%s" target="_blank"><img src="%s" alt="" title="%s" class="attachment-image" /></a>', $data["url"], self::proxyUrl($data["image"], $simplehtml), $data["title"]);
 				} else {
 					$return .= sprintf('<h4><a href="%s">%s</a></h4>', $data['url'], $data['title']);
 				}
@@ -978,7 +849,7 @@ class BBCode extends BaseObject
 			// it loops over the array starting from the first element and going sequentially
 			// to the last element
 			$newbody = str_replace('[$#saved_image' . $cnt . '#$]',
-				'<img src="' . proxy_url($image) . '" alt="' . L10n::t('Image/photo') . '" />', $newbody);
+				'<img src="' . self::proxyUrl($image) . '" alt="' . L10n::t('Image/photo') . '" />', $newbody);
 			$cnt++;
 		}
 
@@ -1509,6 +1380,13 @@ class BBCode extends BaseObject
 			}, $text
 		);
 
+		$text = preg_replace_callback(
+			"&\[url=/people\?q\=(.*)\](.*)\[\/url\]&Usi",
+			function ($match) {
+				return "[url=" . System::baseUrl() . "/search?search=%40" . $match[1] . "]" . $match[2] . "[/url]";
+			}, $text
+		);
+
 		// Server independent link to posts and comments
 		// See issue: https://github.com/diaspora/diaspora_federation/issues/75
 		$expression = "=diaspora://.*?/post/([0-9A-Za-z\-_@.:]{15,254}[0-9A-Za-z])=ism";
@@ -1710,12 +1588,12 @@ class BBCode extends BaseObject
 		// [img=widthxheight]image source[/img]
 		$text = preg_replace_callback(
 			"/\[img\=([0-9]*)x([0-9]*)\](.*?)\[\/img\]/ism",
-			function ($matches) {
+			function ($matches) use ($simple_html) {
 				if (strpos($matches[3], "data:image/") === 0) {
 					return $matches[0];
 				}
 
-				$matches[3] = proxy_url($matches[3]);
+				$matches[3] = self::proxyUrl($matches[3], $simple_html);
 				return "[img=" . $matches[1] . "x" . $matches[2] . "]" . $matches[3] . "[/img]";
 			},
 			$text
@@ -1725,8 +1603,8 @@ class BBCode extends BaseObject
 		$text = preg_replace("/\[zmg\=([0-9]*)x([0-9]*)\](.*?)\[\/zmg\]/ism", '<img class="zrl" src="$3" style="width: $1px;" >', $text);
 
 		$text = preg_replace_callback("/\[img\=([$URLSearchString]*)\](.*?)\[\/img\]/ism",
-			function ($matches) {
-				$matches[1] = proxy_url($matches[1]);
+			function ($matches) use ($simple_html) {
+				$matches[1] = self::proxyUrl($matches[1], $simple_html);
 				$matches[2] = htmlspecialchars($matches[2], ENT_COMPAT);
 				return '<img src="' . $matches[1] . '" alt="' . $matches[2] . '">';
 			},
@@ -1736,12 +1614,12 @@ class BBCode extends BaseObject
 		// [img]pathtoimage[/img]
 		$text = preg_replace_callback(
 			"/\[img\](.*?)\[\/img\]/ism",
-			function ($matches) {
+			function ($matches) use ($simple_html) {
 				if (strpos($matches[1], "data:image/") === 0) {
 					return $matches[0];
 				}
 
-				$matches[1] = proxy_url($matches[1]);
+				$matches[1] = self::proxyUrl($matches[1], $simple_html);
 				return "[img]" . $matches[1] . "[/img]";
 			},
 			$text
@@ -1762,15 +1640,15 @@ class BBCode extends BaseObject
 
 		// Try to Oembed
 		if ($try_oembed) {
-			$text = preg_replace("/\[video\](.*?\.(ogg|ogv|oga|ogm|webm|mp4))\[\/video\]/ism", '<video src="$1" controls="controls" width="' . $a->videowidth . '" height="' . $a->videoheight . '" loop="true"><a href="$1">$1</a></video>', $text);
-			$text = preg_replace("/\[audio\](.*?\.(ogg|ogv|oga|ogm|webm|mp4|mp3))\[\/audio\]/ism", '<audio src="$1" controls="controls"><a href="$1">$1</a></audio>', $text);
+			$text = preg_replace("/\[video\](.*?\.(ogg|ogv|oga|ogm|webm|mp4).*?)\[\/video\]/ism", '<video src="$1" controls="controls" width="' . $a->videowidth . '" height="' . $a->videoheight . '" loop="true"><a href="$1">$1</a></video>', $text);
+			$text = preg_replace("/\[audio\](.*?\.(ogg|ogv|oga|ogm|webm|mp4|mp3).*?)\[\/audio\]/ism", '<audio src="$1" controls="controls"><a href="$1">$1</a></audio>', $text);
 
 			$text = preg_replace_callback("/\[video\](.*?)\[\/video\]/ism", $try_oembed_callback, $text);
 			$text = preg_replace_callback("/\[audio\](.*?)\[\/audio\]/ism", $try_oembed_callback, $text);
 		} else {
-			$text = preg_replace("/\[video\](.*?)\[\/video\]/",
+			$text = preg_replace("/\[video\](.*?)\[\/video\]/ism",
 						'<a href="$1" target="_blank">$1</a>', $text);
-			$text = preg_replace("/\[audio\](.*?)\[\/audio\]/",
+			$text = preg_replace("/\[audio\](.*?)\[\/audio\]/ism",
 						'<a href="$1" target="_blank">$1</a>', $text);
 		}
 
@@ -1947,7 +1825,7 @@ class BBCode extends BaseObject
 	 * @param string $addon The addon for which the abstract is meant for
 	 * @return string The abstract
 	 */
-	private static function getAbstract($text, $addon = "")
+	public static function getAbstract($text, $addon = "")
 	{
 		$abstract = "";
 		$abstracts = [];

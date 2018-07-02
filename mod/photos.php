@@ -19,6 +19,7 @@ use Friendica\Model\Group;
 use Friendica\Model\Item;
 use Friendica\Model\Photo;
 use Friendica\Model\Profile;
+use Friendica\Model\User;
 use Friendica\Network\Probe;
 use Friendica\Object\Image;
 use Friendica\Protocol\DFRN;
@@ -171,22 +172,17 @@ function photos_post(App $a)
 	}
 
 	if (!$can_post) {
-		notice(L10n::t('Permission denied.') . EOL );
+		notice(L10n::t('Permission denied.') . EOL);
 		killme();
 	}
 
-	$r = q("SELECT `contact`.*, `user`.`nickname` FROM `contact` LEFT JOIN `user` ON `user`.`uid` = `contact`.`uid`
-		WHERE `user`.`uid` = %d AND `self` = 1 LIMIT 1",
-		intval($page_owner_uid)
-	);
+	$owner_record = User::getOwnerDataById($page_owner_uid);
 
-	if (!DBM::is_result($r)) {
+	if (!$owner_record) {
 		notice(L10n::t('Contact information unavailable') . EOL);
 		logger('photos_post: unable to locate contact record for page owner. uid=' . $page_owner_uid);
 		killme();
 	}
-
-	$owner_record = $r[0];
 
 	if ($a->argc > 3 && $a->argv[2] === 'album') {
 		$album = hex2bin($a->argv[3]);
@@ -279,19 +275,12 @@ function photos_post(App $a)
 			$str_res = implode(',', $res);
 
 			// remove the associated photos
-			q("DELETE FROM `photo` WHERE `resource-id` IN ( $str_res ) AND `uid` = %d",
+			q("DELETE FROM `photo` WHERE `resource-id` IN ($str_res) AND `uid` = %d",
 				intval($page_owner_uid)
 			);
 
 			// find and delete the corresponding item with all the comments and likes/dislikes
-			$r = q("SELECT `id` FROM `item` WHERE `resource-id` IN ( $str_res ) AND `uid` = %d",
-				intval($page_owner_uid)
-			);
-			if (DBM::is_result($r)) {
-				foreach ($r as $rr) {
-					Item::deleteById($rr['id']);
-				}
-			}
+			Item::deleteForUser(['resource-id' => $res, 'uid' => $page_owner_uid], $page_owner_uid);
 
 			// Update the photo albums cache
 			Photo::clearAlbumCache($page_owner_uid);
@@ -344,16 +333,11 @@ function photos_post(App $a)
 				intval($page_owner_uid),
 				dbesc($r[0]['resource-id'])
 			);
-			$i = q("SELECT `id` FROM `item` WHERE `resource-id` = '%s' AND `uid` = %d LIMIT 1",
-				dbesc($r[0]['resource-id']),
-				intval($page_owner_uid)
-			);
-			if (DBM::is_result($i)) {
-				Item::deleteById($i[0]['id']);
 
-				// Update the photo albums cache
-				Photo::clearAlbumCache($page_owner_uid);
-			}
+			Item::deleteForUser(['resource-id' => $r[0]['resource-id'], 'uid' => $page_owner_uid], $page_owner_uid);
+
+			// Update the photo albums cache
+			Photo::clearAlbumCache($page_owner_uid);
 		}
 
 		goaway('photos/' . $a->data['user']['nickname']);
@@ -388,7 +372,7 @@ function photos_post(App $a)
 			if (DBM::is_result($r)) {
 				$Image = new Image($r[0]['data'], $r[0]['type']);
 				if ($Image->isValid()) {
-					$rotate_deg = ( (intval($_POST['rotate']) == 1) ? 270 : 90 );
+					$rotate_deg = ((intval($_POST['rotate']) == 1) ? 270 : 90);
 					$Image->rotate($rotate_deg);
 
 					$width  = $Image->getWidth();
@@ -466,7 +450,7 @@ function photos_post(App $a)
 		if (!$item_id) {
 			// Create item container
 			$title = '';
-			$uri = item_new_uri($a->get_hostname(),$page_owner_uid);
+			$uri = Item::newURI($page_owner_uid);
 
 			$arr = [];
 			$arr['guid']          = get_guid(32);
@@ -499,14 +483,11 @@ function photos_post(App $a)
 		}
 
 		if ($item_id) {
-			$r = q("SELECT * FROM `item` WHERE `id` = %d AND `uid` = %d LIMIT 1",
-				intval($item_id),
-				intval($page_owner_uid)
-			);
+			$item = Item::selectFirst(['tag', 'inform'], ['id' => $item_id, 'uid' => $page_owner_uid]);
 		}
-		if (DBM::is_result($r)) {
-			$old_tag    = $r[0]['tag'];
-			$old_inform = $r[0]['inform'];
+		if (DBM::is_result($item)) {
+			$old_tag    = $item['tag'];
+			$old_inform = $item['inform'];
 		}
 
 		if (strlen($rawtags)) {
@@ -636,7 +617,7 @@ function photos_post(App $a)
 
 			if (count($taginfo)) {
 				foreach ($taginfo as $tagged) {
-					$uri = item_new_uri($a->get_hostname(), $page_owner_uid);
+					$uri = Item::newURI($page_owner_uid);
 
 					$arr = [];
 					$arr['guid']          = get_guid(32);
@@ -659,6 +640,7 @@ function photos_post(App $a)
 					$arr['deny_gid']      = $p[0]['deny_gid'];
 					$arr['visible']       = 1;
 					$arr['verb']          = ACTIVITY_TAG;
+					$arr['gravity']       = GRAVITY_PARENT;
 					$arr['object-type']   = ACTIVITY_OBJ_PERSON;
 					$arr['target-type']   = ACTIVITY_OBJ_IMAGE;
 					$arr['tag']           = $tagged[4];
@@ -860,7 +842,7 @@ function photos_post(App $a)
 		$smallest = 2;
 	}
 
-	$uri = item_new_uri($a->get_hostname(), $page_owner_uid);
+	$uri = Item::newURI($page_owner_uid);
 
 	// Create item container
 	$lat = $lon = null;
@@ -937,7 +919,7 @@ function photos_content(App $a)
 	require_once 'include/conversation.php';
 
 	if (!x($a->data,'user')) {
-		notice(L10n::t('No photos selected') . EOL );
+		notice(L10n::t('No photos selected') . EOL);
 		return;
 	}
 
@@ -1235,7 +1217,7 @@ function photos_content(App $a)
 			if (DBM::is_result($ph)) {
 				notice(L10n::t('Permission denied. Access to this item may be restricted.'));
 			} else {
-				notice(L10n::t('Photo not available') . EOL );
+				notice(L10n::t('Photo not available') . EOL);
 			}
 			return;
 		}
@@ -1243,11 +1225,14 @@ function photos_content(App $a)
 		$prevlink = '';
 		$nextlink = '';
 
-		/// @todo This query is totally bad, the whole functionality has to be changed
-		// The query leads to a really intense used index.
-		// By now we hide it if someone wants to.
+		/*
+		 * @todo This query is totally bad, the whole functionality has to be changed
+		 * The query leads to a really intense used index.
+		 * By now we hide it if someone wants to.
+		 */
 		if (!Config::get('system', 'no_count', false)) {
 			$order_field = defaults($_GET, 'order', '');
+
 			if ($order_field === 'posted') {
 				$order = 'ASC';
 			} else {
@@ -1280,8 +1265,10 @@ function photos_content(App $a)
  			}
 		}
 
-		if (count($ph) == 1)
+		if (count($ph) == 1) {
 			$hires = $lores = $ph[0];
+		}
+
 		if (count($ph) > 1) {
 			if ($ph[1]['scale'] == 2) {
 				// original is 640 or less, we can display it directly
@@ -1293,6 +1280,7 @@ function photos_content(App $a)
 		}
 
 		$album_link = 'photos/' . $a->data['user']['nickname'] . '/album/' . bin2hex($ph[0]['album']);
+
 		$tools = null;
 		$lock = null;
 
@@ -1303,15 +1291,15 @@ function photos_content(App $a)
 			];
 
 			// lock
-			$lock = ( ( ($ph[0]['uid'] == local_user()) && (strlen($ph[0]['allow_cid']) || strlen($ph[0]['allow_gid'])
-					|| strlen($ph[0]['deny_cid']) || strlen($ph[0]['deny_gid'])) )
+			$lock = ((($ph[0]['uid'] == local_user()) && (strlen($ph[0]['allow_cid']) || strlen($ph[0]['allow_gid'])
+					|| strlen($ph[0]['deny_cid']) || strlen($ph[0]['deny_gid'])))
 					? L10n::t('Private Message')
 					: Null);
 
 
 		}
 
-		if ( $cmd === 'edit') {
+		if ($cmd === 'edit') {
 			$tpl = get_markup_template('photo_edit_head.tpl');
 			$a->page['htmlhead'] .= replace_macros($tpl,[
 				'$prevlink' => $prevlink,
@@ -1319,8 +1307,9 @@ function photos_content(App $a)
 			]);
 		}
 
-		if ($prevlink)
+		if ($prevlink) {
 			$prevlink = [$prevlink, '<div class="icon prev"></div>'] ;
+		}
 
 		$photo = [
 			'href' => 'photo/' . $hires['resource-id'] . '-' . $hires['scale'] . '.' . $phototypes[$hires['type']],
@@ -1345,7 +1334,8 @@ function photos_content(App $a)
 		// The difference is that we won't be displaying the conversation head item
 		// as a "post" but displaying instead the photo it is linked to
 
-		$linked_items = q("SELECT * FROM `item` WHERE `resource-id` = '%s' $sql_extra LIMIT 1",
+		/// @todo Rewrite this query. To do so, $sql_extra must be changed
+		$linked_items = q("SELECT `id` FROM `item` WHERE `resource-id` = '%s' $sql_extra LIMIT 1",
 			dbesc($datum)
 		);
 
@@ -1353,42 +1343,15 @@ function photos_content(App $a)
 		$link_item = [];
 
 		if (DBM::is_result($linked_items)) {
-			$link_item = $linked_items[0];
+			// This is a workaround to not being forced to rewrite the while $sql_extra handling
+			$link_item = Item::selectFirst([], ['id' => $linked_items[0]['id']]);
 
-			$r = q("SELECT COUNT(*) AS `total`
-				FROM `item` LEFT JOIN `contact` ON `contact`.`id` = `item`.`contact-id`
-				WHERE `parent-uri` = '%s' AND `uri` != '%s' AND `item`.`deleted` = 0 and `item`.`moderated` = 0
-				AND `contact`.`blocked` = 0 AND `contact`.`pending` = 0
-				AND `item`.`uid` = %d
-				$sql_extra ",
-				dbesc($link_item['uri']),
-				dbesc($link_item['uri']),
-				intval($link_item['uid'])
+			$condition = ["`parent` = ? AND `parent` != `id`",  $link_item['parent']];
+			$a->set_pager_total(dba::count('item', $condition));
 
-			);
-
-			if (DBM::is_result($r)) {
-				$a->set_pager_total($r[0]['total']);
-			}
-
-
-			$r = q("SELECT `item`.*, `item`.`id` AS `item_id`,
-				`contact`.`name`, `contact`.`photo`, `contact`.`url`, `contact`.`network`,
-				`contact`.`rel`, `contact`.`thumb`, `contact`.`self`,
-				`contact`.`id` AS `cid`, `contact`.`uid` AS `contact-uid`
-				FROM `item` LEFT JOIN `contact` ON `contact`.`id` = `item`.`contact-id`
-				WHERE `parent-uri` = '%s' AND `uri` != '%s' AND `item`.`deleted` = 0 and `item`.`moderated` = 0
-				AND `contact`.`blocked` = 0 AND `contact`.`pending` = 0
-				AND `item`.`uid` = %d
-				$sql_extra
-				ORDER BY `parent` DESC, `id` ASC LIMIT %d ,%d ",
-				dbesc($link_item['uri']),
-				dbesc($link_item['uri']),
-				intval($link_item['uid']),
-				intval($a->pager['start']),
-				intval($a->pager['itemspage'])
-
-			);
+			$params = ['order' => ['id'], 'limit' => [$a->pager['start'], $a->pager['itemspage']]];
+			$result = Item::selectForUser($link_item['uid'], [], $condition, $params);
+			$items = Item::inArray($result);
 
 			if (local_user() && (local_user() == $link_item['uid'])) {
 				Item::update(['unseen' => false], ['parent' => $link_item['parent']]);
@@ -1475,7 +1438,7 @@ function photos_content(App $a)
 				]);
 			}
 
-			if (!DBM::is_result($r)) {
+			if (!DBM::is_result($items)) {
 				if (($can_post || can_write_wall($owner_uid))) {
 					$comments .= replace_macros($cmnt_tpl, [
 						'$return_path' => '',
@@ -1503,8 +1466,8 @@ function photos_content(App $a)
 			];
 
 			// display comments
-			if (DBM::is_result($r)) {
-				foreach ($r as $item) {
+			if (DBM::is_result($items)) {
+				foreach ($items as $item) {
 					builtin_activity_puller($item, $conv_responses);
 				}
 
@@ -1535,7 +1498,7 @@ function photos_content(App $a)
 					]);
 				}
 
-				foreach ($r as $item) {
+				foreach ($items as $item) {
 					$comment = '';
 					$template = $tpl;
 					$sparkle = '';
@@ -1544,23 +1507,12 @@ function photos_content(App $a)
 						continue;
 					}
 
-					$redirect_url = 'redir/' . $item['cid'];
-
-					if (local_user() && ($item['contact-uid'] == local_user())
-						&& ($item['network'] == NETWORK_DFRN) && !$item['self']) {
-						$profile_url = $redirect_url;
+					$profile_url = Contact::MagicLinkById($item['author-id']);
+					if (strpos($profile_url, 'redir/') === 0) {
 						$sparkle = ' sparkle';
 					} else {
-						$profile_url = $item['url'];
 						$sparkle = '';
 					}
-
-					$diff_author = (($item['url'] !== $item['author-link']) ? true : false);
-
-					$profile_name   = ((strlen($item['author-name'])   && $diff_author) ? $item['author-name']   : $item['name']);
-					$profile_avatar = ((strlen($item['author-avatar']) && $diff_author) ? $item['author-avatar'] : $item['thumb']);
-
-					$profile_link = $profile_url;
 
 					$dropping = (($item['contact-id'] == $contact_id) || ($item['uid'] == local_user()));
 					$drop = [
@@ -1570,15 +1522,14 @@ function photos_content(App $a)
 						'delete' => L10n::t('Delete'),
 					];
 
-					$name_e = $profile_name;
 					$title_e = $item['title'];
 					$body_e = BBCode::convert($item['body']);
 
 					$comments .= replace_macros($template,[
 						'$id' => $item['item_id'],
-						'$profile_url' => $profile_link,
-						'$name' => $name_e,
-						'$thumb' => $profile_avatar,
+						'$profile_url' => $profile_url,
+						'$name' => $item['author-name'],
+						'$thumb' => $item['author-avatar'],
 						'$sparkle' => $sparkle,
 						'$title' => $title_e,
 						'$body' => $body_e,
@@ -1681,8 +1632,9 @@ function photos_content(App $a)
 		$twist = false;
 		foreach ($r as $rr) {
 			//hide profile photos to others
-			if (!$is_owner && !remote_user() && ($rr['album'] == L10n::t('Profile Photos')))
+			if (!$is_owner && !remote_user() && ($rr['album'] == L10n::t('Profile Photos'))) {
 				continue;
+			}
 
 			$twist = !$twist;
 

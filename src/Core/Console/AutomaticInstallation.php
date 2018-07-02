@@ -5,6 +5,8 @@ namespace Friendica\Core\Console;
 use Asika\SimpleConsole\Console;
 use dba;
 use Friendica\App;
+use Friendica\Core\Install;
+use Friendica\Core\Theme;
 
 require_once 'mod/install.php';
 require_once 'include/dba.php';
@@ -28,6 +30,7 @@ Options
     -h|--help|-? Show help information
     -v           Show more debug information.
     -a           All setup checks are required (except .htaccess)
+    -f           prepared config file (e.g. ".htconfig.php" itself)
 HELP;
 	}
 
@@ -41,7 +44,13 @@ HELP;
 		$db_user = '';
 		$db_pass = '';
 		$db_data = '';
-		require_once 'htconfig.php';
+
+		$config_file = $this->getOption('f', 'htconfig.php');
+
+		$this->out("Using config $config_file...\n");
+		require_once $config_file;
+
+		Install::setInstallMode();
 
 		$this->out(" Complete!\n\n");
 
@@ -74,7 +83,7 @@ HELP;
 		// Install database
 		$this->out("Inserting data into database...\n");
 
-		$checkResults['data'] = load_database();
+		$checkResults['data'] = Install::installDatabaseStructure();
 
 		if ($checkResults['data'] !== '') {
 			throw new \RuntimeException("ERROR: DB Database creation error. Is the DB empty?\n");
@@ -82,10 +91,19 @@ HELP;
 
 		$this->out(" Complete!\n\n");
 
+		// Install theme
+		$this->out("Installing theme\n");
+		if (!empty($a->config['system']['theme'])) {
+			Theme::install($a->config['system']['theme']);
+			$this->out(" Complete\n\n");
+		} else {
+			$this->out(" Theme setting is empty. Please check the file htconfig.php\n\n");
+		}
+
 		// Copy config file
 		$this->out("Saving config file...\n");
-		if (!copy('htconfig.php', '.htconfig.php')) {
-			throw new \RuntimeException("ERROR: Saving config file failed. Please copy .htautoinstall.php to .htconfig.php manually.\n");
+		if ($config_file != '.htconfig.php' && !copy($config_file, '.htconfig.php')) {
+			throw new \RuntimeException("ERROR: Saving config file failed. Please copy '$config_file' to '.htconfig.php' manually.\n");
 		}
 		$this->out(" Complete!\n\n");
 		$this->out("\nInstallation is finished\n");
@@ -101,14 +119,14 @@ HELP;
 	{
 		$checks = [];
 
-		check_funcs($checks);
-		check_imagik($checks);
-		check_htconfig($checks);
-		check_smarty3($checks);
-		check_keys($checks);
+		Install::checkFunctions($checks);
+		Install::checkImagick($checks);
+		Install::checkHtConfig($checks);
+		Install::checkSmarty3($checks);
+		Install::checkKeys($checks);
 
 		if (!empty($app->config['php_path'])) {
-			check_php($app->config['php_path'], $checks);
+			Install::checkPHP($app->config['php_path'], $checks);
 		} else {
 			throw new \RuntimeException(" ERROR: The php_path is not set in the config. Please check the file .htconfig.php.\n");
 		}
@@ -135,7 +153,7 @@ HELP;
 		);
 
 
-		if (!dba::connect($db_host, $db_user, $db_pass, $db_data, true)) {
+		if (!dba::connect($db_host, $db_user, $db_pass, $db_data)) {
 			$result['status'] = false;
 			$result['help'] = 'Failed, please check your MySQL settings and credentials.';
 		}

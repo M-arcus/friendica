@@ -18,6 +18,7 @@ use Friendica\Model\Profile;
 use Friendica\Network\Probe;
 use Friendica\Util\DateTimeFormat;
 use Friendica\Util\Network;
+use Friendica\Protocol\Diaspora;
 use dba;
 use DOMDocument;
 use DOMXPath;
@@ -521,7 +522,12 @@ class PortableContact
 			}
 		}
 
-		$fields = ['updated' => $last_updated, 'last_contact' => DateTimeFormat::utcNow()];
+		$fields = ['last_contact' => DateTimeFormat::utcNow()];
+
+		if (!empty($last_updated)) {
+			$fields['updated'] = $last_updated;
+		}
+
 		dba::update('gcontact', $fields, ['nurl' => normalise_link($profile)]);
 
 		if (($gcontacts[0]["generation"] == 0)) {
@@ -1003,7 +1009,7 @@ class PortableContact
 
 		// Maybe the page is unencrypted only?
 		$xmlobj = @simplexml_load_string($serverret["body"], 'SimpleXMLElement', 0, "http://docs.oasis-open.org/ns/xri/xrd-1.0");
-		if (!$serverret["success"] || ($serverret["body"] == "") || (@sizeof($xmlobj) == 0) || !is_object($xmlobj)) {
+		if (!$serverret["success"] || ($serverret["body"] == "") || empty($xmlobj) || !is_object($xmlobj)) {
 			$server_url = str_replace("https://", "http://", $server_url);
 
 			// We set the timeout to 20 seconds since this operation should be done in no time if the server was vital
@@ -1019,7 +1025,7 @@ class PortableContact
 			$xmlobj = @simplexml_load_string($serverret["body"], 'SimpleXMLElement', 0, "http://docs.oasis-open.org/ns/xri/xrd-1.0");
 		}
 
-		if (!$serverret["success"] || ($serverret["body"] == "") || (sizeof($xmlobj) == 0) || !is_object($xmlobj)) {
+		if (!$serverret["success"] || ($serverret["body"] == "") || empty($xmlobj) || !is_object($xmlobj)) {
 			// Workaround for bad configured servers (known nginx problem)
 			if (!in_array($serverret["debug"]["http_code"], ["403", "404"])) {
 				$failure = true;
@@ -1315,20 +1321,8 @@ class PortableContact
 					$version = $data->version;
 					$site_name = $data->site_name;
 					$info = $data->info;
-					$register_policy_str = $data->register_policy;
+					$register_policy = constant($data->register_policy);
 					$platform = $data->platform;
-
-					switch ($register_policy_str) {
-						case "REGISTER_CLOSED":
-							$register_policy = REGISTER_CLOSED;
-							break;
-						case "REGISTER_APPROVE":
-							$register_policy = REGISTER_APPROVE;
-							break;
-						case "REGISTER_OPEN":
-							$register_policy = REGISTER_OPEN;
-							break;
-					}
 				}
 			}
 		}
@@ -1421,14 +1415,36 @@ class PortableContact
 			// Avoid duplicates
 			$tags = [];
 			foreach ($data->tags as $tag) {
-				$tag = strtolower($tag);
+				$tag = mb_strtolower($tag);
 				$tags[$tag] = $tag;
 			}
 
 			foreach ($tags as $tag) {
-				dba::insert('gserver-tag', ['gserver-id' => $gserver['id'], 'tag' => $tag]);
+				dba::insert('gserver-tag', ['gserver-id' => $gserver['id'], 'tag' => $tag], true);
 			}
 		}
+
+		// Create or update the relay contact
+		$fields = [];
+		if (isset($data->protocols)) {
+			if (isset($data->protocols->diaspora)) {
+				$fields['network'] = NETWORK_DIASPORA;
+				if (isset($data->protocols->diaspora->receive)) {
+					$fields['batch'] = $data->protocols->diaspora->receive;
+				} elseif (is_string($data->protocols->diaspora)) {
+					$fields['batch'] = $data->protocols->diaspora;
+				}
+			}
+			if (isset($data->protocols->dfrn)) {
+				$fields['network'] = NETWORK_DFRN;
+				if (isset($data->protocols->dfrn->receive)) {
+					$fields['batch'] = $data->protocols->dfrn->receive;
+				} elseif (is_string($data->protocols->dfrn)) {
+					$fields['batch'] = $data->protocols->dfrn;
+				}
+			}
+		}
+		Diaspora::setRelayContact($server_url, $fields);
 	}
 
 	/**
@@ -1499,8 +1515,10 @@ class PortableContact
 		if ($serverdata) {
 			$servers = json_decode($serverdata);
 
-			foreach ($servers->pods as $server) {
-				Worker::add(PRIORITY_LOW, "DiscoverPoCo", "server", "https://".$server->host);
+			if (is_array($servers->pods)) {
+				foreach ($servers->pods as $server) {
+					Worker::add(PRIORITY_LOW, "DiscoverPoCo", "server", "https://".$server->host);
+				}
 			}
 		}
 

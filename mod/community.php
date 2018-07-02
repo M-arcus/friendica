@@ -30,6 +30,11 @@ function community_content(App $a, $update = 0)
 
 	$page_style = Config::get('system', 'community_page_style');
 
+	if ($page_style == CP_NO_INTERNAL_COMMUNITY) {
+		notice(L10n::t('Access denied.') . EOL);
+		return;
+	}
+
 	if ($a->argc > 1) {
 		$content = $a->argv[1];
 	} else {
@@ -166,7 +171,7 @@ function community_content(App $a, $update = 0)
 		$s = $r;
 	}
 
-	$o .= conversation($a, $s, 'community', $update);
+	$o .= conversation($a, $s, 'community', $update, false, 'commented', local_user());
 
 	if (!$update) {
 		$o .= alt_pager($a, count($r));
@@ -184,9 +189,10 @@ function community_content(App $a, $update = 0)
 function community_getitems($start, $itemspage, $content)
 {
 	if ($content == 'local') {
-		$r = dba::p("SELECT `item`.`uri`, `item`.`author-link` FROM `thread`
+		$r = dba::p("SELECT `item`.`uri`, `author`.`url` AS `author-link` FROM `thread`
 			INNER JOIN `user` ON `user`.`uid` = `thread`.`uid` AND NOT `user`.`hidewall`
 			INNER JOIN `item` ON `item`.`id` = `thread`.`iid`
+			INNER JOIN `contact` AS `author` ON `author`.`id`=`item`.`author-id`
 			WHERE `thread`.`visible` AND NOT `thread`.`deleted` AND NOT `thread`.`moderated`
 			AND NOT `thread`.`private` AND `thread`.`wall` AND `thread`.`origin`
 			ORDER BY `thread`.`commented` DESC LIMIT " . intval($start) . ", " . intval($itemspage)
@@ -195,7 +201,7 @@ function community_getitems($start, $itemspage, $content)
 	} elseif ($content == 'global') {
 		$r = dba::p("SELECT `uri` FROM `thread`
 				INNER JOIN `item` ON `item`.`id` = `thread`.`iid`
-		                INNER JOIN `contact` AS `author` ON `author`.`id`=`item`.`author-id`
+				INNER JOIN `contact` AS `author` ON `author`.`id`=`item`.`author-id`
 				WHERE `thread`.`uid` = 0 AND NOT `author`.`hidden` AND NOT `author`.`blocked`
 				ORDER BY `thread`.`commented` DESC LIMIT " . intval($start) . ", " . intval($itemspage));
 		return dba::inArray($r);

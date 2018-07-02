@@ -189,7 +189,6 @@ function dfrn_request_post(App $a)
 				}
 
 				// (ignore reply, nothing we can do it failed)
-				// Old: goaway(Profile::zrl($dfrn_url));
 				goaway($forwardurl);
 				return; // NOTREACHED
 			}
@@ -263,13 +262,9 @@ function dfrn_request_post(App $a)
 		if (DBM::is_result($r)) {
 			foreach ($r as $rr) {
 				if (!$rr['rel']) {
-					q("DELETE FROM `contact` WHERE `id` = %d AND NOT `self`",
-						intval($rr['cid'])
-					);
+					dba::delete('contact', ['id' => $rr['cid'], 'self' => false]);
 				}
-				q("DELETE FROM `intro` WHERE `id` = %d",
-					intval($rr['iid'])
-				);
+				dba::delete('intro', ['id' => $rr['iid']]);
 			}
 		}
 
@@ -581,7 +576,6 @@ function dfrn_request_content(App $a)
 						'dfrn_id'  => $r[0]['issued-id'],
 						'intro_id' => $intro[0]['id'],
 						'duplex'   => (($r[0]['page-flags'] == PAGE_FREELOVE) ? 1 : 0),
-						'activity' => intval(PConfig::get($r[0]['uid'], 'system', 'post_newfriend'))
 					];
 					dfrn_confirm_post($a, $handsfree);
 				}

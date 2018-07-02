@@ -93,9 +93,9 @@ function item_post(App $a) {
 
 	if ($thr_parent || $thr_parent_uri) {
 		if ($thr_parent) {
-			$parent_item = dba::selectFirst('item', [], ['id' => $thr_parent]);
+			$parent_item = Item::selectFirst([], ['id' => $thr_parent]);
 		} elseif ($thr_parent_uri) {
-			$parent_item = dba::selectFirst('item', [], ['uri' => $thr_parent_uri, 'uid' => $profile_uid]);
+			$parent_item = Item::selectFirst([], ['uri' => $thr_parent_uri, 'uid' => $profile_uid]);
 		}
 
 		// if this isn't the real parent of the conversation, find it
@@ -567,7 +567,7 @@ function item_post(App $a) {
 		$network = NETWORK_DFRN;
 	}
 
-	$gravity = ($parent ? 6 : 0);
+	$gravity = ($parent ? GRAVITY_COMMENT : GRAVITY_PARENT);
 
 	// even if the post arrived via API we are considering that it
 	// originated on this site by default for determining relayability.
@@ -576,7 +576,7 @@ function item_post(App $a) {
 
 	$notify_type = ($parent ? 'comment-new' : 'wall-new');
 
-	$uri = ($message_id ? $message_id : item_new_uri($a->get_hostname(), $profile_uid, $guid));
+	$uri = ($message_id ? $message_id : Item::newURI($profile_uid, $guid));
 
 	// Fallback so that we alway have a parent uri
 	if (!$thr_parent_uri || !$parent) {
@@ -647,18 +647,23 @@ function item_post(App $a) {
 	// This field is for storing the raw conversation data
 	$datarray['protocol'] = PROTOCOL_DFRN;
 
-	$r = dba::fetch_first("SELECT `conversation-uri`, `conversation-href` FROM `conversation` WHERE `item-uri` = ?", $datarray['parent-uri']);
-	if (DBM::is_result($r)) {
+	$conversation = dba::selectFirst('conversation', ['conversation-uri', 'conversation-href'], ['item-uri' => $datarray['parent-uri']]);
+	if (DBM::is_result($conversation)) {
 		if ($r['conversation-uri'] != '') {
-			$datarray['conversation-uri'] = $r['conversation-uri'];
+			$datarray['conversation-uri'] = $conversation['conversation-uri'];
 		}
 		if ($r['conversation-href'] != '') {
-			$datarray['conversation-href'] = $r['conversation-href'];
+			$datarray['conversation-href'] = $conversation['conversation-href'];
 		}
 	}
 
 	if ($orig_post) {
 		$datarray['edit'] = true;
+	}
+
+	// Check for hashtags in the body and repair or add hashtag links
+	if ($preview || $orig_post) {
+		Item::setHashtags($datarray);
 	}
 
 	// preview mode - prepare the body for display and send it via json
@@ -732,7 +737,7 @@ function item_post(App $a) {
 		goaway($return_path);
 	}
 
-	$datarray = dba::selectFirst('item', [], ['id' => $post_id]);
+	$datarray = Item::selectFirst(Item::ITEM_FIELDLIST, ['id' => $post_id]);
 
 	if (!DBM::is_result($datarray)) {
 		logger("Item with id ".$post_id." couldn't be fetched.");
@@ -872,7 +877,7 @@ function item_content(App $a) {
 	$o = '';
 	if (($a->argc == 3) && ($a->argv[1] === 'drop') && intval($a->argv[2])) {
 		if (is_ajax()) {
-			$o = Item::deleteById($a->argv[2]);
+			$o = Item::deleteForUser(['id' => $a->argv[2]], local_user());
 		} else {
 			$o = drop_item($a->argv[2]);
 		}

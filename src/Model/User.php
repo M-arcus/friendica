@@ -66,6 +66,21 @@ class User
 	}
 
 	/**
+	 * @brief Get owner data by nick name
+	 *
+	 * @param int $nick
+	 * @return boolean|array
+	 */
+	public static function getOwnerDataByNick($nick)
+	{
+		$user = dba::selectFirst('user', ['uid'], ['nickname' => $nick]);
+		if (!DBM::is_result($user)) {
+			return false;
+		}
+		return self::getOwnerDataById($user['uid']);
+	}
+
+	/**
 	 * @brief Returns the default group for a given user and network
 	 *
 	 * @param int $uid User id
@@ -127,13 +142,23 @@ class User
 	{
 		$user = self::getAuthenticationInfo($user_info);
 
-		if ($user['legacy_password']) {
+		if (strpos($user['password'], '$') === false) {
+			//Legacy hash that has not been replaced by a new hash yet
+			if (self::hashPasswordLegacy($password) === $user['password']) {
+				self::updatePassword($user['uid'], $password);
+
+				return $user['uid'];
+			}
+		} elseif (!empty($user['legacy_password'])) {
+			//Legacy hash that has been double-hashed and not replaced by a new hash yet
+			//Warning: `legacy_password` is not necessary in sync with the content of `password`
 			if (password_verify(self::hashPasswordLegacy($password), $user['password'])) {
 				self::updatePassword($user['uid'], $password);
 
 				return $user['uid'];
 			}
 		} elseif (password_verify($password, $user['password'])) {
+			//New password hash
 			if (password_needs_rehash($user['password'], PASSWORD_DEFAULT)) {
 				self::updatePassword($user['uid'], $password);
 			}
@@ -186,18 +211,11 @@ class User
 					]
 				);
 			} else {
-				$user = dba::fetch_first('SELECT `uid`, `password`, `legacy_password`
-					FROM `user`
-					WHERE (`email` = ? OR `username` = ? OR `nickname` = ?)
-					AND `blocked` = 0
-					AND `account_expired` = 0
-					AND `account_removed` = 0
-					AND `verified` = 1
-					LIMIT 1',
-					$user_info,
-					$user_info,
-					$user_info
-				);
+				$fields = ['uid', 'password', 'legacy_password'];
+				$condition = ["(`email` = ? OR `username` = ? OR `nickname` = ?)
+					AND NOT `blocked` AND NOT `account_expired` AND NOT `account_removed` AND `verified`",
+					$user_info, $user_info, $user_info];
+				$user = dba::selectFirst('user', $fields, $condition);
 			}
 
 			if (!DBM::is_result($user)) {
@@ -248,6 +266,10 @@ class User
 	 */
 	public static function hashPassword($password)
 	{
+		if (!trim($password)) {
+			throw new Exception(L10n::t('Password can\'t be empty'));
+		}
+
 		return password_hash($password, PASSWORD_DEFAULT);
 	}
 
@@ -317,6 +339,7 @@ class User
 		$confirm    = x($data, 'confirm')    ? trim($data['confirm'])            : '';
 		$blocked    = x($data, 'blocked')    ? intval($data['blocked'])          : 0;
 		$verified   = x($data, 'verified')   ? intval($data['verified'])         : 0;
+		$language   = x($data, 'language')   ? notags(trim($data['language'])) : 'en';
 
 		$publish = x($data, 'profile_publish_reg') && intval($data['profile_publish_reg']) ? 1 : 0;
 		$netpublish = strlen(Config::get('system', 'directory')) ? $publish : 0;
@@ -345,7 +368,7 @@ class User
 				$_SESSION['register'] = 1;
 				$_SESSION['openid'] = $openid_url;
 
-				$openid = new LightOpenID;
+				$openid = new LightOpenID($a->get_hostname());
 				$openid->identity = $openid_url;
 				$openid->returnUrl = System::baseUrl() . '/openid';
 				$openid->required = ['namePerson/friendly', 'contact/email', 'namePerson'];
@@ -452,6 +475,7 @@ class User
 			'sprvkey'  => $sprvkey,
 			'verified' => $verified,
 			'blocked'  => $blocked,
+			'language' => $language,
 			'timezone' => 'UTC',
 			'register_date' => DateTimeFormat::utcNow(),
 			'default-location' => ''

@@ -15,7 +15,7 @@ Especially don't do that with undocumented values.
 The header of the section describes the category, the value is the parameter.
 Example: To set the automatic database cleanup process add this line to your .htconfig.php:
 
-    $a->config['system']['dbclean'] = true;
+    $a->config['system']['always_show_preview'] = true;
 
 ## jabber ##
 * **debug** (Boolean) - Enable debug level for the jabber account synchronisation.
@@ -37,15 +37,15 @@ Example: To set the automatic database cleanup process add this line to your .ht
 * **db_loglimit_index** - Number of index rows needed to be logged for indexes on the watchlist
 * **db_loglimit_index_high** - Number of index rows to be logged anyway (for any index)
 * **db_log_index_blacklist** - Blacklist of indexes that shouldn't be watched
-* **dbclean** (Boolean) - Enable the automatic database cleanup process
-* **dbclean-expire-days** (Integer) - Days after which remote items will be deleted. Own items, and marked or filed items are kept.
+* **dbclean_expire_conversation** (Integer) - When DBClean is enabled, any entry in the conversation table will be deleted after this many days.  These data are normally needed only for debugging purposes and they are safe to delete.  Default 90.
 * **diaspora_test** (Boolean) - For development only. Disables the message transfer.
 * **disable_email_validation** (Boolean) - Disables the check if a mail address is in a valid format and can be resolved via DNS.
 * **disable_url_validation** (Boolean) - Disables the DNS lookup of an URL.
 * **disable_password_exposed** (Boolean) - Disable the exposition check against the remote haveibeenpwned API on password change. Default value is false.
-* **dlogfile - location of the developer log file
-* **dlogip - restricts develop log writes to requests originating from this IP address
+* **dlogfile** - location of the developer log file
+* **dlogip** - restricts develop log writes to requests originating from this IP address
 * **frontend_worker_timeout** - Value in minutes after we think that a frontend task was killed by the webserver. Default value is 10.
+* **groupedit_image_limit** (Integer) - Number of contacts at which the group editor should switch from display the profile pictures of the contacts to only display the names. Default is 400. This can alternatively be set on a per account basis in the pconfig table.
 * **hsts** (Boolean) - Enables the sending of HTTP Strict Transport Security headers
 * **ignore_cache** (Boolean) - For development only. Disables the item cache.
 * **instances_social_key** - Key to the API of https://instances.social which retrieves data about mastodon servers. See https://instances.social/api/token to get an API key.
@@ -87,6 +87,7 @@ Example: To set the automatic database cleanup process add this line to your .ht
 * **pushpoll_frequency** -
 * **qsearch_limit** - Default value is 100.
 * **remove_multiplicated_lines** (Boolean) - If enabled, multiple linefeeds in items are stripped to a single one.
+* **sendmail_params** (Boolean) - Normal sendmail command parameters will be added when the PHP mail() function is called for sending e-mails.  This ensures the Sender Email address setting is applied to the message envelope rather than the host's default address.  Default is true.  Set to false if your non-sendmail agent is incompatible, or to restore old behavior of using the host address.
 * **show_unsupported_addons** (Boolean) - Show all addons including the unsupported ones.
 * **show_unsupported_themes** (Boolean) - Show all themes including the unsupported ones.
 * **show_global_community_hint** (Boolean) - When the global community page is enabled, use this option to display a hint above the stream, that this is a collection of all public top-level postings that arrive on your node.
@@ -95,6 +96,7 @@ Example: To set the automatic database cleanup process add this line to your .ht
 * **throttle_limit_month** - Maximum number of posts that a user can send per month with the API.
 * **wall-to-wall_share** (Boolean) - Displays forwarded posts like "wall-to-wall" posts.
 * **worker_cooldown** - Cooldown time after each worker function call. Default value is 0 seconds.
+* **worker_load_exponent** (Integer) - Default 3, which allows only 25% of the maximum worker queues when server load reaches around 37% of maximum load.  For a linear response where 25% of worker queues are allowed at 75% of maximum load, set this to 1.  Setting 0 would allow maximum worker queues at all times, which is not recommended.
 * **xrd_timeout** - Timeout for fetching the XRD links. Default value is 20 seconds.
 
 ## experimental ##
@@ -126,3 +128,11 @@ The configuration variables db_host, db_user, db_pass and db_data are holding yo
 If you need to specify a port to access the database, you can do so by appending ":portnumber" to the db_host variable.
 
     $db_host = 'your.mysqlhost.com:123456';
+
+If all of the following environment variables are set, Friendica will use them instead of the previously configured variables for the db:
+
+    MYSQL_HOST
+    MYSQL_PORT
+    MYSQL_USERNAME
+    MYSQL_PASSWORD
+    MYSQL_DATABASE

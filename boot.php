@@ -39,9 +39,9 @@ require_once 'include/text.php';
 
 define('FRIENDICA_PLATFORM',     'Friendica');
 define('FRIENDICA_CODENAME',     'The Tazmans Flax-lily');
-define('FRIENDICA_VERSION',      '2018-05-dev');
+define('FRIENDICA_VERSION',      '2018.08-dev');
 define('DFRN_PROTOCOL_VERSION',  '2.23');
-define('DB_UPDATE_VERSION',      1259);
+define('DB_UPDATE_VERSION',      1274);
 define('NEW_UPDATE_ROUTINE_VERSION', 1170);
 
 /**
@@ -232,10 +232,11 @@ define('ACCOUNT_TYPE_RELAY',       4);
  * Type of the community page
  * @{
  */
-define('CP_NO_COMMUNITY_PAGE',  -1);
-define('CP_USERS_ON_SERVER',     0);
-define('CP_GLOBAL_COMMUNITY',    1);
-define('CP_USERS_AND_GLOBAL',    2);
+define('CP_NO_INTERNAL_COMMUNITY', -2);
+define('CP_NO_COMMUNITY_PAGE',     -1);
+define('CP_USERS_ON_SERVER',        0);
+define('CP_GLOBAL_COMMUNITY',       1);
+define('CP_USERS_AND_GLOBAL',       2);
 /**
  * @}
  */
@@ -450,8 +451,9 @@ define('ACTIVITY_OBJ_QUESTION', 'http://activityschema.org/object/question');
  * @{
  */
 define('GRAVITY_PARENT',       0);
-define('GRAVITY_LIKE',         3);
+define('GRAVITY_ACTIVITY',     3);
 define('GRAVITY_COMMENT',      6);
+define('GRAVITY_UNKNOWN',      9);
 /* @}*/
 
 /**
@@ -953,10 +955,12 @@ function public_contact()
  */
 function remote_user()
 {
-	// You cannot be both local and remote
-	if (local_user()) {
-		return false;
-	}
+	// You cannot be both local and remote.
+	// Unncommented by rabuzarus because remote authentication to local
+	// profiles wasn't possible anymore (2018-04-12).
+//	if (local_user()) {
+//		return false;
+//	}
 	if (x($_SESSION, 'authenticated') && x($_SESSION, 'visitor_id')) {
 		return intval($_SESSION['visitor_id']);
 	}
@@ -1013,114 +1017,6 @@ function get_max_import_size()
 {
 	$a = get_app();
 	return (x($a->config, 'max_import_size') ? $a->config['max_import_size'] : 0);
-}
-
-
-function current_theme()
-{
-	$app_base_themes = ['duepuntozero', 'dispy', 'quattro'];
-
-	$a = get_app();
-
-	$page_theme = null;
-
-	// Find the theme that belongs to the user whose stuff we are looking at
-
-	if ($a->profile_uid && ($a->profile_uid != local_user())) {
-		$r = q(
-			"select theme from user where uid = %d limit 1",
-			intval($a->profile_uid)
-		);
-		if (DBM::is_result($r)) {
-			$page_theme = $r[0]['theme'];
-		}
-	}
-
-	// Allow folks to over-rule user themes and always use their own on their own site.
-	// This works only if the user is on the same server
-
-	if ($page_theme && local_user() && (local_user() != $a->profile_uid)) {
-		if (PConfig::get(local_user(), 'system', 'always_my_theme')) {
-			$page_theme = null;
-		}
-	}
-
-//		$mobile_detect = new Mobile_Detect();
-//		$is_mobile = $mobile_detect->isMobile() || $mobile_detect->isTablet();
-	$is_mobile = $a->is_mobile || $a->is_tablet;
-
-	$standard_system_theme = Config::get('system', 'theme', '');
-	$standard_theme_name = ((isset($_SESSION) && x($_SESSION, 'theme')) ? $_SESSION['theme'] : $standard_system_theme);
-
-	if ($is_mobile) {
-		if (isset($_SESSION['show-mobile']) && !$_SESSION['show-mobile']) {
-			$theme_name = $standard_theme_name;
-		} else {
-			$system_theme = Config::get('system', 'mobile-theme', '');
-			if ($system_theme == '') {
-				$system_theme = $standard_system_theme;
-			}
-			$theme_name = ((isset($_SESSION) && x($_SESSION, 'mobile-theme')) ? $_SESSION['mobile-theme'] : $system_theme);
-
-			if ($theme_name === '---') {
-				// user has selected to have the mobile theme be the same as the normal one
-				$theme_name = $standard_theme_name;
-
-				if ($page_theme) {
-					$theme_name = $page_theme;
-				}
-			}
-		}
-	} else {
-		$theme_name = $standard_theme_name;
-
-		if ($page_theme) {
-			$theme_name = $page_theme;
-		}
-	}
-
-	if ($theme_name
-		&& (file_exists('view/theme/' . $theme_name . '/style.css')
-		|| file_exists('view/theme/' . $theme_name . '/style.php'))
-	) {
-		return($theme_name);
-	}
-
-	foreach ($app_base_themes as $t) {
-		if (file_exists('view/theme/' . $t . '/style.css')
-			|| file_exists('view/theme/' . $t . '/style.php')
-		) {
-			return($t);
-		}
-	}
-
-	$fallback = array_merge(glob('view/theme/*/style.css'), glob('view/theme/*/style.php'));
-	if (count($fallback)) {
-		return (str_replace('view/theme/', '', substr($fallback[0], 0, -10)));
-	}
-
-	/// @TODO No final return statement?
-}
-
-/**
- * @brief Return full URL to theme which is currently in effect.
- *
- * Provide a sane default if nothing is chosen or the specified theme does not exist.
- *
- * @return string
- */
-function current_theme_url()
-{
-	$a = get_app();
-
-	$t = current_theme();
-
-	$opts = (($a->profile_uid) ? '?f=&puid=' . $a->profile_uid : '');
-	if (file_exists('view/theme/' . $t . '/style.php')) {
-		return('view/theme/' . $t . '/style.pcss' . $opts);
-	}
-
-	return('view/theme/' . $t . '/style.css');
 }
 
 function feed_birthday($uid, $tz)
@@ -1181,6 +1077,7 @@ function is_site_admin()
 	$adminlist = explode(",", str_replace(" ", "", $a->config['admin_email']));
 
 	//if(local_user() && x($a->user,'email') && x($a->config,'admin_email') && ($a->user['email'] === $a->config['admin_email']))
+	/// @TODO This if() + 2 returns can be shrinked into one return
 	if (local_user() && x($a->user, 'email') && x($a->config, 'admin_email') && in_array($a->user['email'], $adminlist)) {
 		return true;
 	}
@@ -1278,7 +1175,7 @@ function random_digits($digits)
 {
 	$rn = '';
 	for ($i = 0; $i < $digits; $i++) {
-		/// @TODO rand() is different to mt_rand() and maybe lesser "random"
+		/// @TODO Avoid rand/mt_rand, when it comes to cryptography, they are generating predictable (seedable) numbers.
 		$rn .= rand(0, 9);
 	}
 	return $rn;
@@ -1289,10 +1186,10 @@ function get_server()
 	$server = Config::get("system", "directory");
 
 	if ($server == "") {
-		$server = "http://dir.friendica.social";
+		$server = "https://dir.friendica.social";
 	}
 
-	return($server);
+	return $server;
 }
 
 function get_temppath()
@@ -1341,7 +1238,7 @@ function get_cachefile($file, $writemode = true)
 	$cache = get_itemcachepath();
 
 	if ((!$cache) || (!is_dir($cache))) {
-		return("");
+		return "";
 	}
 
 	$subfolder = $cache . "/" . substr($file, 0, 2);
@@ -1355,7 +1252,6 @@ function get_cachefile($file, $writemode = true)
 		}
 	}
 
-	/// @TODO no need to put braces here
 	return $cachepath;
 }
 
@@ -1462,7 +1358,6 @@ function get_spoolpath()
 	return "";
 }
 
-
 if (!function_exists('exif_imagetype')) {
 	function exif_imagetype($file)
 	{
@@ -1500,7 +1395,7 @@ function validate_include(&$file)
 	}
 
 	// Simply return flag
-	return ($valid);
+	return $valid;
 }
 
 function current_load()

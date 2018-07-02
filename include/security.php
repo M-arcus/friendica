@@ -99,11 +99,9 @@ function authenticate_success($user_record, $login_initial = false, $interactive
 	$master_record = $a->user;
 
 	if ((x($_SESSION, 'submanage')) && intval($_SESSION['submanage'])) {
-		$r = dba::fetch_first("SELECT * FROM `user` WHERE `uid` = ? LIMIT 1",
-			intval($_SESSION['submanage'])
-		);
-		if (DBM::is_result($r)) {
-			$master_record = $r;
+		$user = dba::selectFirst('user', [], ['uid' => $_SESSION['submanage']]);
+		if (DBM::is_result($user)) {
+			$master_record = $user;
 		}
 	}
 
@@ -155,10 +153,10 @@ function authenticate_success($user_record, $login_initial = false, $interactive
 		logger('auth_identities refresh: ' . print_r($a->identities, true), LOGGER_DEBUG);
 	}
 
-	$r = dba::fetch_first("SELECT * FROM `contact` WHERE `uid` = ? AND `self` LIMIT 1", $_SESSION['uid']);
-	if (DBM::is_result($r)) {
-		$a->contact = $r;
-		$a->cid = $r['id'];
+	$contact = dba::selectFirst('contact', [], ['uid' => $_SESSION['uid'], 'self' => true]);
+	if (DBM::is_result($contact)) {
+		$a->contact = $contact;
+		$a->cid = $contact['id'];
 		$_SESSION['cid'] = $a->cid;
 	}
 
@@ -254,6 +252,7 @@ function can_write_wall($owner)
 	return false;
 }
 
+/// @TODO $groups should be array
 function permissions_sql($owner_id, $remote_verified = false, $groups = null)
 {
 	$local_user = local_user();
@@ -275,6 +274,13 @@ function permissions_sql($owner_id, $remote_verified = false, $groups = null)
 	 */
 	if ($local_user && $local_user == $owner_id) {
 		$sql = '';
+	/**
+	 * Authenticated visitor. Unless pre-verified,
+	 * check that the contact belongs to this $owner_id
+	 * and load the groups the visitor belongs to.
+	 * If pre-verified, the caller is expected to have already
+	 * done this and passed the groups into this function.
+	 */
 	} elseif ($remote_user) {
 		/*
 		 * Authenticated visitor. Unless pre-verified,
@@ -298,9 +304,10 @@ function permissions_sql($owner_id, $remote_verified = false, $groups = null)
 		if ($remote_verified) {
 			$gs = '<<>>'; // should be impossible to match
 
-			if (is_array($groups) && count($groups)) {
-				foreach ($groups as $g)
+			if (is_array($groups)) {
+				foreach ($groups as $g) {
 					$gs .= '|<' . intval($g) . '>';
+				}
 			}
 
 			$sql = sprintf(
@@ -405,12 +412,21 @@ function get_form_security_token($typename = '')
 
 function check_form_security_token($typename = '', $formname = 'form_security_token')
 {
-	if (!x($_REQUEST, $formname)) {
-		return false;
+	$hash = null;
+
+	if (!empty($_REQUEST[$formname])) {
+		/// @TODO Careful, not secured!
+		$hash = $_REQUEST[$formname];
 	}
 
-	/// @TODO Careful, not secured!
-	$hash = $_REQUEST[$formname];
+	if (!empty($_SERVER['HTTP_X_CSRF_TOKEN'])) {
+		/// @TODO Careful, not secured!
+		$hash = $_SERVER['HTTP_X_CSRF_TOKEN'];
+	}
+
+	if (empty($hash)) {
+		return false;
+	}
 
 	$max_livetime = 10800; // 3 hours
 
